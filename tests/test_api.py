@@ -61,11 +61,20 @@ def _seed_qc_ready_run(tmp_path: Path) -> str:
         {"BRAND": "?",    "MLBRAND": "ZETA", "score": 60,
          "QC Priority": "HIGH", "ML Matches Lookup": "No",  "Note": "check"},
     ])
+    # Mirror the production layout: dictEnsemble in memory, heavy frames
+    # spilled to a pickle in the run's tmpdir.  Tests still want to
+    # exercise finalize end-to-end so we honour the same contract.
+    import pickle as _pickle
+    heavy_path = tmpdir / "phase1_heavy.pkl"
+    with open(heavy_path, "wb") as f:
+        _pickle.dump({
+            "FINAL":         pd.DataFrame(),
+            "FLAT_FILE_OUT": pd.DataFrame(),
+            "meta":          pd.DataFrame(),
+        }, f)
     record.pipeline_payload = {
-        "FINAL":         pd.DataFrame(),
-        "FLAT_FILE_OUT": pd.DataFrame(),
-        "meta":          pd.DataFrame(),
-        "dictEnsemble":  {"Final_BRAND_lkp": df},
+        "dictEnsemble": {"Final_BRAND_lkp": df},
+        "_heavy_path":  str(heavy_path),
     }
     jobs.set_state(record, state="qc_ready", progress=0.85, stage_label="QC ready")
     return record.run_id

@@ -292,11 +292,17 @@ def qc_finalize(run_id: str) -> QcFinalized:
 
     jobs.set_state(record, state="finalizing", stage_label="Writing QC workbook…")
 
+    # Heavy frames live on disk between qc_ready and finalize so they
+    # don't pin parent memory during the analyst's review.  Single
+    # pickle.load here (~10–50 ms typical) and we have everything.
+    import pickle as _pickle
     from api.pipeline import Phase1Payload
+    with open(record.pipeline_payload["_heavy_path"], "rb") as _f:
+        _heavy = _pickle.load(_f)
     payload = Phase1Payload(
-        FINAL=record.pipeline_payload["FINAL"],
-        FLAT_FILE_OUT=record.pipeline_payload["FLAT_FILE_OUT"],
-        meta=record.pipeline_payload["meta"],
+        FINAL=_heavy["FINAL"],
+        FLAT_FILE_OUT=_heavy["FLAT_FILE_OUT"],
+        meta=_heavy["meta"],
         dictEnsemble=record.pipeline_payload["dictEnsemble"],
     )
 

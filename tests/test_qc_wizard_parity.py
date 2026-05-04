@@ -63,11 +63,17 @@ def _seed_qc_run(tmp_path: Path) -> tuple[str, jobs.JobRecord]:
         {"BRAND": "ACME",  "MLBRAND": "ACME", "score": 100,
          "QC Priority": "LOW",    "ML Matches Lookup": "Yes", "Note": ""},
     ])
+    import pickle as _pickle
+    heavy_path = tmpdir / "phase1_heavy.pkl"
+    with open(heavy_path, "wb") as f:
+        _pickle.dump({
+            "FINAL":         pd.DataFrame(),
+            "FLAT_FILE_OUT": pd.DataFrame(),
+            "meta":          pd.DataFrame(),
+        }, f)
     record.pipeline_payload = {
-        "FINAL":         pd.DataFrame(),
-        "FLAT_FILE_OUT": pd.DataFrame(),
-        "meta":          pd.DataFrame(),
-        "dictEnsemble":  {"Final_BRAND_lkp": df},
+        "dictEnsemble": {"Final_BRAND_lkp": df},
+        "_heavy_path":  str(heavy_path),
     }
     jobs.set_state(record, state="qc_ready")
     return record.run_id, record

@@ -290,12 +290,25 @@ def run_phase1_worker(record: JobRecord, excel_path: str, csv_path: str) -> None
 
 
 def _attach_phase1_payload(record: JobRecord, payload: Any) -> None:
-    with record.lock:
-        record.pipeline_payload = {
+    """
+    QC review touches `dictEnsemble` (one DataFrame per attribute) on
+    every sheet fetch, so we keep that in memory for fast access.
+    FINAL / FLAT_FILE_OUT / meta are full-data DataFrames only used
+    once at finalize; spilling them to disk avoids pinning ~200 MB
+    per concurrent QC review in the parent FastAPI process.  With 5
+    analysts each in a multi-hour review, that adds up fast.
+    """
+    heavy_path = record.tmpdir / "phase1_heavy.pkl"
+    with open(heavy_path, "wb") as f:
+        pickle.dump({
             "FINAL":         payload.FINAL,
             "FLAT_FILE_OUT": payload.FLAT_FILE_OUT,
             "meta":          payload.meta,
-            "dictEnsemble":  payload.dictEnsemble,
+        }, f, protocol=pickle.HIGHEST_PROTOCOL)
+    with record.lock:
+        record.pipeline_payload = {
+            "dictEnsemble": payload.dictEnsemble,
+            "_heavy_path":  str(heavy_path),
         }
 
 
