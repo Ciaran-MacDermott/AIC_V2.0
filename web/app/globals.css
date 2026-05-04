@@ -1,4 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+/* Inter is now loaded via next/font/google in app/layout.tsx, which
+   self-hosts the font and removes the runtime Google Fonts CDN call.
+   The --font-inter CSS variable below is set on <html>. */
 
 @tailwind base;
 @tailwind components;
@@ -23,7 +25,7 @@ html {
   font-size: 17px;
 }
 html, body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: var(--font-inter), 'Inter', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-feature-settings: "cv11", "ss01", "ss03";
@@ -135,7 +137,7 @@ body::before {
   --ag-selected-row-background-color: #E8DBF2;
   --ag-border-color:            #EAEAEC;
   --ag-font-size:               14px;
-  --ag-font-family: 'Inter', system-ui, sans-serif;
+  --ag-font-family: var(--font-inter), 'Inter', system-ui, sans-serif;
   --ag-header-column-separator-display: none;
   --ag-cell-horizontal-padding: 14px;
 }
