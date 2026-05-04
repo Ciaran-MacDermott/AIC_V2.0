@@ -2,11 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { api } from "@/lib/api";
 import { listRecent, forgetRun, type RecentRun } from "@/lib/recent";
-import type { ActiveRunSummary, JobState } from "@/lib/types";
-
-const ACTIVE_POLL_MS = 10000;
+import type { JobState } from "@/lib/types";
 
 const STATE_TONE: Record<JobState, string> = {
   queued:           "bg-zinc-100 text-zinc-600",
@@ -36,41 +33,13 @@ function deepLinkFor(phase: "phase1" | "phase2", runId: string): string {
 }
 
 export function RunsSidebar({ currentRunId }: { currentRunId?: string | null }) {
-  const [active, setActive] = useState<ActiveRunSummary[]>([]);
   const [recent, setRecent] = useState<RecentRun[]>([]);
   const [collapsed, setCollapsed] = useState(false);
-  const [activeError, setActiveError] = useState(false);
 
-  // Active runs from server — refreshed on a slow poll.  We don't piggyback
-  // on the page's status poll because the page may not be polling at all
-  // (e.g. when the user lands fresh and hasn't started a run yet).
-  useEffect(() => {
-    let cancelled = false;
-    let timer: number | null = null;
-
-    async function tick() {
-      try {
-        const { runs } = await api.listRuns();
-        if (cancelled) return;
-        setActive(runs);
-        setActiveError(false);
-      } catch {
-        if (cancelled) return;
-        setActiveError(true);
-      } finally {
-        if (!cancelled) timer = window.setTimeout(tick, ACTIVE_POLL_MS);
-      }
-    }
-
-    tick();
-    return () => {
-      cancelled = true;
-      if (timer) window.clearTimeout(timer);
-    };
-  }, []);
-
-  // Recent runs from localStorage — refresh whenever the page or another
-  // component records or forgets a run.
+  // Recent runs come from localStorage — every browser shows only its own
+  // runs.  We deliberately don't poll the server for "everyone's runs":
+  // it leaked other users' activity into the sidebar and the BFF was
+  // taking constant /api/runs hits for almost no UX value.
   useEffect(() => {
     function refresh() { setRecent(listRecent()); }
     refresh();
@@ -82,15 +51,7 @@ export function RunsSidebar({ currentRunId }: { currentRunId?: string | null }) 
     };
   }, []);
 
-  const activeIds = new Set(active.map((r) => r.run_id));
-  // De-dupe recent against active so we don't render the same run twice;
-  // the active panel always wins because its state is fresher.
-  const recentOnly = recent.filter((r) => !activeIds.has(r.run_id));
-
-  if (active.length === 0 && recentOnly.length === 0 && !activeError) {
-    // Nothing to show yet — keep the page chrome clean.
-    return null;
-  }
+  if (recent.length === 0) return null;
 
   return (
     <aside className="surface-card mb-4">
@@ -99,52 +60,26 @@ export function RunsSidebar({ currentRunId }: { currentRunId?: string | null }) 
         onClick={() => setCollapsed((c) => !c)}
         className="w-full flex items-center justify-between px-4 py-2 text-xs font-medium text-zinc-600 hover:bg-zinc-50 rounded-t-xl"
       >
-        <span>
-          Runs · {active.length} active{recentOnly.length ? ` · ${recentOnly.length} recent` : ""}
-        </span>
+        <span>Recent runs · {recent.length}</span>
         <span className="text-zinc-400">{collapsed ? "▸" : "▾"}</span>
       </button>
 
       {!collapsed && (
         <div className="px-4 pb-3 pt-1 text-xs">
-          {activeError && (
-            <p className="text-zinc-400 italic">Couldn&apos;t reach the server.</p>
-          )}
-
-          {active.length > 0 && (
-            <div className="space-y-1.5">
-              <p className="text-[10px] uppercase tracking-wide text-zinc-400">On the server</p>
-              {active.map((r) => (
-                <RunRow
-                  key={r.run_id}
-                  href={deepLinkFor(r.phase, r.run_id)}
-                  isCurrent={r.run_id === currentRunId}
-                  state={r.state}
-                  phase={r.phase}
-                  label={r.stage_label || r.run_id.slice(0, 6)}
-                  detail={`run ${r.run_id.slice(0, 6)} · ${Math.round(r.elapsed_s)}s`}
-                />
-              ))}
-            </div>
-          )}
-
-          {recentOnly.length > 0 && (
-            <div className="mt-3 space-y-1.5">
-              <p className="text-[10px] uppercase tracking-wide text-zinc-400">Recent on this device</p>
-              {recentOnly.map((r) => (
-                <RunRow
-                  key={r.run_id}
-                  href={deepLinkFor(r.phase, r.run_id)}
-                  isCurrent={r.run_id === currentRunId}
-                  state={r.last_state ?? "stopped"}
-                  phase={r.phase}
-                  label={r.label || r.run_id.slice(0, 6)}
-                  detail={new Date(r.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                  onForget={() => { forgetRun(r.run_id); setRecent(listRecent()); }}
-                />
-              ))}
-            </div>
-          )}
+          <div className="space-y-1.5">
+            {recent.map((r) => (
+              <RunRow
+                key={r.run_id}
+                href={deepLinkFor(r.phase, r.run_id)}
+                isCurrent={r.run_id === currentRunId}
+                state={r.last_state ?? "stopped"}
+                phase={r.phase}
+                label={r.label || r.run_id.slice(0, 6)}
+                detail={new Date(r.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                onForget={() => { forgetRun(r.run_id); setRecent(listRecent()); }}
+              />
+            ))}
+          </div>
         </div>
       )}
     </aside>
