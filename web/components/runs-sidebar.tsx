@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { listRecent, forgetRun, type RecentRun } from "@/lib/recent";
 import type { ActiveRunSummary, JobState } from "@/lib/types";
 
-const ACTIVE_POLL_MS = 4000;
+const ACTIVE_POLL_MS = 10000;
 
 const STATE_TONE: Record<JobState, string> = {
   queued:           "bg-zinc-100 text-zinc-600",
