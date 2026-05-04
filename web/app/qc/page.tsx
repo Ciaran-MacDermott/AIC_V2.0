@@ -4,9 +4,10 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
-import type { QcSheetList, QcSheetPayload, QcSheetSummary } from "@/lib/types";
+import type { JobStatus, QcSheetList, QcSheetPayload, QcSheetSummary } from "@/lib/types";
 import { Header } from "@/components/header";
 import { QcGrid } from "@/components/qc-grid";
+import { LogTail } from "@/components/log-tail";
 
 const SAVE_DEBOUNCE_MS = 600;
 
@@ -29,6 +30,7 @@ function QcWizardPage() {
   const [error, setError] = useState<string | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [finalising, setFinalising] = useState(false);
+  const [status, setStatus] = useState<JobStatus | null>(null);
 
   // Buffer of unsaved edits per sheet, keyed by row_id → attribute_value.
   const pendingEdits = useRef<Map<string, string>>(new Map());
@@ -44,6 +46,19 @@ function QcWizardPage() {
         setSheetList(res.sheets);
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    return () => { cancelled = true; };
+  }, [runId]);
+
+  // Fetch the Phase 1 job snapshot once so we can surface a subtle
+  // "pipeline complete" indicator + the log tail on demand.  Mirrors the
+  // Streamlit page's persistent log box but kept minimal — the analyst
+  // is now focused on QC, not on watching output scroll past.
+  useEffect(() => {
+    if (!runId) return;
+    let cancelled = false;
+    api.status(runId)
+      .then((s) => { if (!cancelled) setStatus(s); })
+      .catch(() => { /* non-fatal — log strip just won't render */ });
     return () => { cancelled = true; };
   }, [runId]);
 
@@ -117,6 +132,28 @@ function QcWizardPage() {
   const currentSheet = sheetList?.[step];
   const stepProgress = useMemo(() => total === 0 ? 0 : step / total, [step, total]);
 
+  const pipelineStrip = status && status.log_tail.length > 0 ? (
+    <details className="group surface-card-quiet mb-3 px-4 py-2 text-xs text-zinc-600">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 select-none">
+        <span className="flex items-center gap-2">
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />
+          <span>
+            Pipeline complete
+            <span className="text-zinc-400"> · </span>
+            <span className="tabular-nums">{Math.round(status.elapsed_s)}s</span>
+            <span className="text-zinc-400"> · </span>
+            <span className="tabular-nums">{status.log_cursor}</span> log lines
+          </span>
+        </span>
+        <span className="text-zinc-400 group-open:hidden">Show output ▾</span>
+        <span className="text-zinc-400 hidden group-open:inline">Hide output ▴</span>
+      </summary>
+      <div className="mt-3">
+        <LogTail lines={status.log_tail} />
+      </div>
+    </details>
+  ) : null;
+
   return (
     <>
       <Header
@@ -132,6 +169,8 @@ function QcWizardPage() {
       )}
 
       {downloadUrl ? (
+        <>
+        {pipelineStrip}
         <section className="rounded-2xl border border-emerald-200 bg-emerald-50/80 backdrop-blur text-emerald-900 p-5 fade-in-up">
           <div className="font-medium mb-2">QC workbook ready.</div>
           <div className="flex flex-wrap items-center gap-3">
@@ -171,6 +210,7 @@ function QcWizardPage() {
             </Link>
           </div>
         </section>
+        </>
       ) : !sheetList ? (
         <div className="text-sm text-zinc-500">Loading sheets…</div>
       ) : sheetList.length === 0 ? (
@@ -179,6 +219,7 @@ function QcWizardPage() {
         </div>
       ) : (
         <div className="fade-in-up">
+          {pipelineStrip}
           <div className="surface-card p-5 mb-4">
             <div className="mb-2 flex items-center justify-between text-sm text-zinc-600">
               <span>
