@@ -174,7 +174,10 @@ def test_phase2_scan_returns_default_upc_and_mfr_columns(
     # Brand + tool-brand value lists power the mismatch dropdowns.
     assert "ACME" in body["brand_values"]
     assert "ACME" in body["tool_brand_values"]
-    assert body["scan_id"]   # opaque token that POST /api/phase2/runs can re-use
+    # scan_id is kept in the response model for API stability but the
+    # tmpdir is now reaped before the response — nothing consumes the
+    # token, so it's intentionally empty.
+    assert body["scan_id"] == ""
 
 
 def test_phase2_scan_handles_loose_files(client: TestClient, tmp_path: Path) -> None:

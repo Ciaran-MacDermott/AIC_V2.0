@@ -448,18 +448,14 @@ async def create_phase2_run(
 
 # ── Phase 2 input scan (autodetect columns + dropdown values) ───────────────
 # Matches _load_cols_from_dir / _load_cols_from_bytes in the Streamlit page.
-# Two routes: one for a full project zip, one for a single QC workbook.  The
-# scan_id can be re-used as a `parent_run_id` for /api/phase2/runs/from-parent
-# so the UI doesn't have to upload the inputs twice.
+# Two routes: one for a full project zip, one for a single QC workbook.
+#
+# The scan extracts inputs into a tmpdir just long enough to read column
+# metadata, then nukes the tmpdir before responding — the frontend keeps
+# the metadata in memory and re-uploads the actual files when the user
+# starts the run.  No bytes survive the request on disk.
 
-_SCAN_DIRS: dict[str, Path] = {}
-
-
-def _new_scan_id(directory: Path) -> str:
-    import uuid
-    sid = uuid.uuid4().hex[:12]
-    _SCAN_DIRS[sid] = directory
-    return sid
+_EMPTY_SCAN_ID = ""   # kept in the response model for API stability
 
 
 @app.post("/api/phase2/scan", response_model=Phase2ScanResult)
@@ -472,11 +468,11 @@ async def scan_phase2_zip(zip: UploadFile = File(...)) -> Phase2ScanResult:
         root = extract_zip_with_unwrap(await zip.read(), scan_dir / "extracted")
         meta = scan_phase2_directory(root)
     except InputError as exc:
-        shutil.rmtree(scan_dir, ignore_errors=True)
         raise HTTPException(400, str(exc))
+    finally:
+        shutil.rmtree(scan_dir, ignore_errors=True)
 
-    scan_id = _new_scan_id(root)
-    return Phase2ScanResult(scan_id=scan_id, **meta.__dict__)
+    return Phase2ScanResult(scan_id=_EMPTY_SCAN_ID, **meta.__dict__)
 
 
 @app.post("/api/phase2/scan/xlsx", response_model=Phase2ScanResult)
@@ -493,11 +489,11 @@ async def scan_phase2_xlsx_route(xlsx: UploadFile = File(...)) -> Phase2ScanResu
     try:
         meta = scan_phase2_xlsx(target)
     except InputError as exc:
-        shutil.rmtree(scan_dir, ignore_errors=True)
         raise HTTPException(400, str(exc))
+    finally:
+        shutil.rmtree(scan_dir, ignore_errors=True)
 
-    scan_id = _new_scan_id(scan_dir)
-    return Phase2ScanResult(scan_id=scan_id, **meta.__dict__)
+    return Phase2ScanResult(scan_id=_EMPTY_SCAN_ID, **meta.__dict__)
 
 
 # ── Phase 2 loose-files run ─────────────────────────────────────────────────
