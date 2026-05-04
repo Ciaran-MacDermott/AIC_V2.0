@@ -14,7 +14,4 @@ web/tsconfig.tsbuildinfo
 # Reference snapshot of upstream Streamlit pages — handy locally, not for git
 .reference/
 
-# Local documentation (Word docs, generators) — kept on disk, not pushed.
-docs/
-*.docx
 examples/
