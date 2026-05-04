@@ -169,3 +169,60 @@ def test_get_refreshes_last_touched(tmp_run_dir: Path) -> None:
     record.last_touched = 0.0   # pretend it's been idle forever
     reg.get(record.run_id)
     assert record.last_touched > 0.0, "registry.get must refresh last_touched"
+
+
+def test_run_slots_caps_concurrency() -> None:
+    """RUN_SLOTS must allow up to MAX_RUN_SLOTS concurrent acquires
+    and block the next one."""
+    import threading
+    # Take a fresh semaphore so we don't drain the module-level one
+    # for the rest of the test session.
+    sem = threading.BoundedSemaphore(jobs.MAX_RUN_SLOTS)
+    held = []
+    for _ in range(jobs.MAX_RUN_SLOTS):
+        assert sem.acquire(blocking=False), "should fit MAX_RUN_SLOTS holders"
+        held.append(True)
+    assert not sem.acquire(blocking=False), (
+        f"slot {jobs.MAX_RUN_SLOTS + 1} must block — semaphore is busted"
+    )
+    for _ in held:
+        sem.release()
+
+
+def test_queue_eta_only_kicks_in_when_all_slots_busy(tmp_path: Path) -> None:
+    """compute_queue_info should return None ETA until running_count
+    actually fills MAX_RUN_SLOTS — otherwise we'd flash a stale ETA at
+    a queued record that's about to leave the queue."""
+    reg = jobs.JobRegistry()
+    jobs.registry = reg   # compute_queue_info reads the module-level singleton
+
+    # Pre-seed median run duration so the function has something to project.
+    for _ in range(3):
+        jobs.record_run_duration("phase1", 60.0)
+
+    # Three slots busy (out of MAX_RUN_SLOTS=5), one queued — ETA hidden.
+    for i in range(3):
+        d = tmp_path / f"running_{i}"
+        d.mkdir()
+        rec = reg.create(phase="phase1", tmpdir=d)
+        jobs.set_state(rec, state="running")
+
+    qd = tmp_path / "queued"
+    qd.mkdir()
+    queued = reg.create(phase="phase1", tmpdir=qd)
+    jobs.set_state(queued, state="queued")
+
+    pos, depth, eta = jobs.compute_queue_info(queued)
+    assert pos == 0
+    assert depth == 1
+    assert eta is None, "ETA must hide while running_count < MAX_RUN_SLOTS"
+
+    # Saturate the slots and the ETA should appear.
+    for i in range(jobs.MAX_RUN_SLOTS - 3):
+        d = tmp_path / f"saturate_{i}"
+        d.mkdir()
+        rec = reg.create(phase="phase1", tmpdir=d)
+        jobs.set_state(rec, state="running")
+
+    pos, depth, eta = jobs.compute_queue_info(queued)
+    assert eta is not None and eta > 0

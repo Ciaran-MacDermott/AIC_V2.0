@@ -27,7 +27,18 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-# Held by a worker for the duration of one pipeline execution.
+# Concurrent-run cap.  Each pipeline subprocess takes roughly 200–400 MB
+# resident plus a few seconds of cold-start; on a 4-vCPU box, 5 in flight
+# is comfortable while keeping plenty of headroom for FastAPI itself.
+# The Streamlit version was effectively limited to 1 (PIPELINE_LOCK), so
+# anything ≥ 2 is already a step up.  Beyond MAX_RUN_SLOTS, runs queue
+# at state="queued" and the ETA logic kicks in.
+MAX_RUN_SLOTS = 5
+RUN_SLOTS = threading.BoundedSemaphore(MAX_RUN_SLOTS)
+
+# Back-compat shim: anything that historically held PIPELINE_LOCK
+# (single-tenant guarantee) now sits behind RUN_SLOTS instead.  Some
+# existing tests and the in-process fallback path still import the name.
 PIPELINE_LOCK = threading.Lock()
 
 # Soft cap on how many recent log lines we hand back in a status snapshot.
@@ -265,15 +276,14 @@ def compute_queue_info(record: JobRecord) -> tuple[Optional[int], Optional[int],
     """
     Project (queue_position, queue_depth, eta_seconds) for ``record``.
 
-    Mirrors what users would see if they had visibility into PIPELINE_LOCK:
-    the worker on the lock is ahead of them, plus any other queued workers.
-    Only meaningful while record.state == 'queued'; for already-running
-    records we return (None, None, None) so the UI hides the queue chip.
+    With MAX_RUN_SLOTS slots, the first MAX_RUN_SLOTS runs go straight to
+    running.  Anyone behind that sits at state="queued"; this function
+    tells the UI roughly how long they'll wait.  Returns (None,…) for
+    already-running records so the UI hides the queue chip.
     """
     if record.state != "queued":
         return None, None, None
 
-    # Snapshot all active records, then sort queued ones by created order.
     active = registry.list_active()
     queued_sorted = sorted(
         [r for r in active if r.state == "queued"],
@@ -288,13 +298,22 @@ def compute_queue_info(record: JobRecord) -> tuple[Optional[int], Optional[int],
     except ValueError:
         position_in_queue = 0
 
-    # Queue position counts the records ahead of you, including the one
-    # actively holding PIPELINE_LOCK (if any).
-    queue_position = running_count + position_in_queue
-    queue_depth    = running_count + len(queued_sorted)
+    # 0 = next in line for a slot.  Depth is the queue length only; the
+    # currently-running runs aren't a "queue" anymore — they've all got
+    # their own slot.
+    queue_position = position_in_queue
+    queue_depth    = len(queued_sorted)
 
+    # ETA estimate: with MAX_RUN_SLOTS independent runs going, on average
+    # one finishes every (median / MAX_RUN_SLOTS) seconds.  (position+1)
+    # finishes need to happen before we get a slot.  Only project when
+    # all slots are full — otherwise being "queued" is a transient state
+    # the worker is about to leave.
     median = median_run_duration(record.phase)
-    eta_seconds = (median * (queue_position + 1)) if median else None
+    if median and running_count >= MAX_RUN_SLOTS:
+        eta_seconds = (position_in_queue + 1) * median / MAX_RUN_SLOTS
+    else:
+        eta_seconds = None
     return queue_position, queue_depth, eta_seconds
 
 
