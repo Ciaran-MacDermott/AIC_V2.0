@@ -106,10 +106,66 @@ def test_ttl_evicts_finished_runs_only(tmp_path: Path) -> None:
 
     time.sleep(0.01)
 
-    # Trigger eviction by calling get() on something else.
+    # Trigger eviction by creating something else.  We use create() not
+    # get() because get() touches the record under test, refreshing its
+    # last_touched and defeating eviction.
     other_dir = tmp_path / "other"
     other_dir.mkdir()
     reg.create(phase="phase1", tmpdir=other_dir)
 
-    assert reg.get(fin.run_id) is None
-    assert reg.get(run.run_id) is run, "running jobs must not be evicted by TTL"
+    assert fin.run_id not in reg._jobs       # noqa: SLF001
+    assert run.run_id in reg._jobs, "running jobs must not be evicted by TTL"  # noqa: SLF001
+
+
+def test_idle_qc_ready_run_evicts_after_ttl(tmp_path: Path) -> None:
+    """The bug we just fixed: qc_ready / post_qc_done runs were never
+    evicted because finished_at was only set for done/error/stopped."""
+    reg = jobs.JobRegistry(ttl_seconds=0)
+
+    abandoned_dir = tmp_path / "abandoned"
+    abandoned_dir.mkdir()
+    abandoned = reg.create(phase="phase1", tmpdir=abandoned_dir)
+    jobs.set_state(abandoned, state="qc_ready")
+
+    time.sleep(0.01)
+
+    other_dir = tmp_path / "other"
+    other_dir.mkdir()
+    reg.create(phase="phase1", tmpdir=other_dir)
+
+    assert abandoned.run_id not in reg._jobs, (   # noqa: SLF001
+        "abandoned qc_ready runs must be reaped by idle-TTL"
+    )
+
+
+def test_active_states_are_immune_to_idle_eviction(tmp_path: Path) -> None:
+    """Worker-alive states must never be evicted regardless of how long
+    they've gone without an API touch — the worker thread still owns
+    the tmpdir and (for mismatch_pending) the pipeline lock."""
+    reg = jobs.JobRegistry(ttl_seconds=0)
+
+    for state in ("queued", "running", "finalizing",
+                  "post_qc_running", "mismatch_pending"):
+        d = tmp_path / state
+        d.mkdir()
+        rec = reg.create(phase="phase1", tmpdir=d)
+        jobs.set_state(rec, state=state)
+        time.sleep(0.01)
+
+        # Force eviction sweep without touching the record under test.
+        with reg._mu:                          # noqa: SLF001
+            reg._evict_expired_locked()        # noqa: SLF001
+
+        assert rec.run_id in reg._jobs, (      # noqa: SLF001
+            f"state={state!r} must survive idle eviction"
+        )
+
+
+def test_get_refreshes_last_touched(tmp_run_dir: Path) -> None:
+    """An open browser tab polling status must keep the run alive."""
+    reg = jobs.JobRegistry()
+    record = reg.create(phase="phase1", tmpdir=tmp_run_dir)
+
+    record.last_touched = 0.0   # pretend it's been idle forever
+    reg.get(record.run_id)
+    assert record.last_touched > 0.0, "registry.get must refresh last_touched"

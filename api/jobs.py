@@ -75,6 +75,11 @@ class JobRecord:
     stage_label: str = "Queued"
     started_at: float = field(default_factory=time.time)
     finished_at: Optional[float] = None
+    # Last sign of life — refreshed by both worker progress (set_state)
+    # and any API touch (registry.get).  Eviction is keyed on this so
+    # runs whose tab is closed get reaped, but a long QC session that
+    # keeps fetching sheets stays alive.
+    last_touched: float = field(default_factory=time.time)
     error: Optional[str] = None
     # User-facing error metadata.  ``error`` keeps the technical
     # traceback for support; these two power the dialog the UI renders
@@ -111,8 +116,21 @@ class JobRecord:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
+# States where a worker thread is actively executing or parked.  Records
+# in these states are NEVER evicted by TTL — only an explicit DELETE or
+# the worker reaching a non-active state can release them.  Note that
+# `mismatch_pending` is included here even though it's user-driven: the
+# Phase 2 worker is parked on resume_event holding PIPELINE_LOCK, so
+# evicting the record without signalling stop_event would leak the
+# thread.  Stop-on-timeout for stuck mismatch reviews is a separate
+# follow-up.
+_ACTIVE_STATES = frozenset({
+    "queued", "running", "finalizing", "post_qc_running", "mismatch_pending",
+})
+
+
 class JobRegistry:
-    """In-memory store of JobRecords with TTL eviction."""
+    """In-memory store of JobRecords with idle-TTL eviction."""
 
     def __init__(self, ttl_seconds: int = 60 * 60):
         self._jobs: dict[str, JobRecord] = {}
@@ -132,7 +150,13 @@ class JobRegistry:
     def get(self, run_id: str) -> Optional[JobRecord]:
         with self._mu:
             self._evict_expired_locked()
-            return self._jobs.get(run_id)
+            record = self._jobs.get(run_id)
+        if record is not None:
+            # Touch outside the registry lock to keep contention low —
+            # record.lock is per-record.
+            with record.lock:
+                record.last_touched = time.time()
+        return record
 
     def delete(self, run_id: str) -> bool:
         with self._mu:
@@ -153,7 +177,8 @@ class JobRegistry:
         now = time.time()
         expired = [
             rid for rid, r in self._jobs.items()
-            if r.finished_at and (now - r.finished_at) > self._ttl
+            if r.state not in _ACTIVE_STATES
+            and (now - r.last_touched) > self._ttl
         ]
         for rid in expired:
             record = self._jobs.pop(rid)
@@ -183,6 +208,8 @@ def set_state(record: JobRecord, *, state: Optional[str] = None,
               error_advice: Optional[str] = None,
               error_category: Optional[str] = None) -> None:
     with record.lock:
+        # Worker progress counts as activity for the idle-TTL clock too.
+        record.last_touched = time.time()
         if state is not None:
             record.state = state
             if state in ("done", "error", "stopped"):
@@ -281,3 +308,23 @@ def logs_since(record: JobRecord, since: int) -> tuple[int, list[str]]:
 
 # Singleton — the FastAPI app imports `registry` directly.
 registry = JobRegistry()
+
+
+def _reap_loop() -> None:
+    """Background reaper — runs eviction even when the API is idle.
+
+    Without this, eviction only fires when a request comes in.  An
+    abandoned `qc_ready` run with no incoming traffic would survive
+    indefinitely.  Tick once a minute; eviction itself is cheap.
+    """
+    while True:
+        time.sleep(60)
+        try:
+            with registry._mu:                    # noqa: SLF001
+                registry._evict_expired_locked()  # noqa: SLF001
+        except Exception:
+            # The reaper must never die — swallow and try again.
+            pass
+
+
+threading.Thread(target=_reap_loop, name="job-reaper", daemon=True).start()
