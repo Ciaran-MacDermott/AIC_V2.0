@@ -14,9 +14,9 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -54,12 +54,52 @@ from api.schemas import (
 
 app = FastAPI(title="AIC API")
 
+import os as _os
+
+# CORS:
+#   * Dev: Next runs on :3000 and the BFF on :8000 — pre-flight needs to
+#     pass for cross-origin fetch to work.
+#   * Prod (single Docker container): the static export is served by
+#     FastAPI itself, so requests are same-origin and CORS is moot.
+#   * Other deployments (frontend behind a separate domain) can extend
+#     the allow-list via AIC_CORS_ORIGINS=https://foo,https://bar.
+_extra_origins = [
+    o.strip() for o in _os.environ.get("AIC_CORS_ORIGINS", "").split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", *_extra_origins],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Upload size guard.  Without this a 5 GB upload reads straight into
+# memory inside the route handler (`await xlsx.read()`) and OOMs the
+# BFF.  200 MB is comfortably above the largest realistic Phase 1
+# input we've seen and well under the per-process headroom.  Override
+# via env var if a workflow ever needs more.
+MAX_UPLOAD_BYTES = int(_os.environ.get("AIC_MAX_UPLOAD_MB", "200")) * 1024 * 1024
+
+
+@app.middleware("http")
+async def _enforce_upload_limit(request: Request, call_next):
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > MAX_UPLOAD_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={
+                "error_title":    "File too large",
+                "error_advice":   (
+                    f"This upload is over the {MAX_UPLOAD_BYTES // (1024*1024)} MB "
+                    "per-request limit.  If your input is genuinely this big, "
+                    "ask an admin to raise AIC_MAX_UPLOAD_MB."
+                ),
+                "error_category": "input",
+            },
+        )
+    return await call_next(request)
 
 
 @app.get("/api/health")

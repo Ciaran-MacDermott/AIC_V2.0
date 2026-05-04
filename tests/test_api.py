@@ -33,6 +33,22 @@ def client() -> TestClient:
     return TestClient(app)
 
 
+def test_oversize_upload_rejected_by_middleware(client: TestClient) -> None:
+    """Content-Length over the cap must be rejected with 413 + a friendly
+    payload, before the route handler ever reads the body."""
+    headers = {"content-length": str(10 * 1024 * 1024 * 1024)}  # 10 GB
+    r = client.post(
+        "/api/phase1/runs",
+        files={"xlsx": ("a.xlsx", b"x", "application/octet-stream"),
+               "csv":  ("a.csv",  b"x", "text/csv")},
+        headers=headers,
+    )
+    assert r.status_code == 413, r.text
+    body = r.json()
+    assert body["error_category"] == "input"
+    assert "MB" in body["error_advice"]
+
+
 def _seed_qc_ready_run(tmp_path: Path) -> str:
     """Create a registry record that looks like a finished pipeline."""
     tmpdir = tmp_path / "seeded"

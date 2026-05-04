@@ -308,112 +308,172 @@ def start_phase1(record: JobRecord, excel_path: str, csv_path: str) -> threading
 def run_phase2_worker(record: JobRecord, directory_path: str,
                       inputs: Phase2Inputs) -> None:
     """
-    Phase 2 orchestration.  The mismatch pause now happens BETWEEN
-    subprocesses, not inside one — Phase A is its own subprocess, so
-    while the user reviews mismatches we hold no slot at all.  When
-    they resolve, Phase B runs in a fresh subprocess.
+    Phase 2 orchestration.  Three control-flow shapes:
+
+    1. No mismatch (happy path) — Phase A and Phase B both run while the
+       slot is held, so we don't churn the semaphore between them.
+    2. Mismatch surfaced — drop the slot, park the worker on
+       resume_event while the user reviews, reacquire a fresh slot for
+       Phase B once corrections arrive.  This means a long review never
+       blocks other users.
+    3. Error / stop at any point — release slot, mark state, return.
     """
     set_state(record, state="running", stage_label="Queued…")
-
-    interim: Any = None
-    corrections: list[dict[str, Any]] = []
     phase_a_started_at = time.time()
     review_seconds = 0.0
 
-    # ── Phase A ────────────────────────────────────────────────────────────
+    interim: Any = None
+    needs_review = False
+
+    # ── Phase A (+ Phase B if no mismatch) ────────────────────────────────
     with _run_slot(record):
         set_state(record, stage_label="Starting…")
         try:
-            if _inprocess():
-                with _redirect_stdout(record, STAGE_PROGRESS_PHASE2, STAGE_LABELS_PHASE2):
-                    try:
-                        interim = run_phase_a(
-                            Path(directory_path), inputs, stop_event=record.stop_event,
-                        )
-                    except MismatchReviewNeeded as exc:
-                        _stash_mismatch(record, exc.groups, inputs, exc.phase_a_state)
-                        set_state(record, state="mismatch_pending",
-                                  progress=STAGE_PROGRESS_PHASE2["awaiting user review"],
-                                  stage_label=STAGE_LABELS_PHASE2["awaiting user review"])
-                        interim = None
-            else:
-                _write_pickle(record.tmpdir / "input.pkl", {
-                    "directory_path": directory_path,
-                    "phase2_inputs":  inputs,
-                })
-                rc = _spawn_pipeline(record, "phase2_a",
-                                     STAGE_PROGRESS_PHASE2, STAGE_LABELS_PHASE2)
-                if rc == 99:
-                    raise Phase2PipelineStopped()
-                if rc == 42:
-                    groups = _read_pickle(record.tmpdir / "mismatch.pkl")
-                    interim_state = _read_pickle(record.tmpdir / "interim.pkl")
-                    _stash_mismatch(record, groups, inputs, interim_state)
-                    set_state(record, state="mismatch_pending",
-                              progress=STAGE_PROGRESS_PHASE2["awaiting user review"],
-                              stage_label=STAGE_LABELS_PHASE2["awaiting user review"])
-                    interim = None
-                elif rc != 0:
-                    tb, title, advice, cat = _classify_subprocess_error(record)
-                    set_state(record, state="error", error=tb, stage_label="Failed",
-                              error_title=title, error_advice=advice, error_category=cat)
-                    return
-                else:
-                    interim = _read_pickle(record.tmpdir / "interim.pkl")
+            interim = _run_phase_a(record, directory_path, inputs)
+        except _MismatchSurfaced as ms:
+            _stash_mismatch(record, ms.groups, inputs, ms.phase_a_state)
+            set_state(record, state="mismatch_pending",
+                      progress=STAGE_PROGRESS_PHASE2["awaiting user review"],
+                      stage_label=STAGE_LABELS_PHASE2["awaiting user review"])
+            needs_review = True
         except (PipelineStopped, Phase2PipelineStopped):
             append_log(record, "Run cancelled by user.")
             set_state(record, state="stopped", stage_label="Stopped")
+            return
+        except _PipelineErrored as err:
+            set_state(record, state="error", error=err.tb, stage_label="Failed",
+                      error_title=err.title, error_advice=err.advice,
+                      error_category=err.category)
             return
         except Exception as exc:
             _record_unexpected_error(record, exc)
             return
 
-    # ── User review (no slot held) ────────────────────────────────────────
-    if record.state == "mismatch_pending":
-        review_started = time.time()
-        record.resume_event.wait()
-        review_seconds = time.time() - review_started
-        if record.stop_event.is_set():
-            append_log(record, "Run cancelled by user.")
-            set_state(record, state="stopped", stage_label="Stopped")
+        if not needs_review:
+            # Happy path — keep the slot for Phase B.  Avoids handing it
+            # to a queued user just to take it back two seconds later.
+            try:
+                _run_phase_b(record, interim, corrections=[])
+            except (PipelineStopped, Phase2PipelineStopped):
+                append_log(record, "Run cancelled by user.")
+                set_state(record, state="stopped", stage_label="Stopped")
+                return
+            except _PipelineErrored as err:
+                set_state(record, state="error", error=err.tb, stage_label="Failed",
+                          error_title=err.title, error_advice=err.advice,
+                          error_category=err.category)
+                return
+            except Exception as exc:
+                _record_unexpected_error(record, exc)
+                return
+            set_state(record, state="done", progress=1.0, stage_label="✓ Complete")
+            record_run_duration("phase2", time.time() - phase_a_started_at)
             return
-        with record.lock:
-            corrections = list(record.mismatch_corrections)
-            interim = record.phase2_interim or _read_pickle(record.tmpdir / "interim.pkl")
-        set_state(record, state="running", stage_label="Resuming with corrections…")
 
-    # ── Phase B ───────────────────────────────────────────────────────────
+    # ── User review (no slot held — other users can run while we wait) ────
+    review_started = time.time()
+    record.resume_event.wait()
+    review_seconds = time.time() - review_started
+    if record.stop_event.is_set():
+        append_log(record, "Run cancelled by user.")
+        set_state(record, state="stopped", stage_label="Stopped")
+        return
+    with record.lock:
+        corrections = list(record.mismatch_corrections)
+        interim = record.phase2_interim or _read_pickle(record.tmpdir / "interim.pkl")
+    set_state(record, state="running", stage_label="Resuming with corrections…")
+
+    # ── Phase B (resumed) ─────────────────────────────────────────────────
     with _run_slot(record):
         try:
-            if _inprocess():
-                with _redirect_stdout(record, STAGE_PROGRESS_PHASE2, STAGE_LABELS_PHASE2):
-                    result = run_phase_b(
-                        interim, corrections, output_dir=record.tmpdir,
-                        stop_event=record.stop_event,
-                    )
-            else:
-                _write_pickle(record.tmpdir / "interim.pkl", interim)
-                _write_pickle(record.tmpdir / "corrections.pkl", corrections)
-                rc = _spawn_pipeline(record, "phase2_b",
-                                     STAGE_PROGRESS_PHASE2, STAGE_LABELS_PHASE2)
-                if rc == 99:
-                    raise Phase2PipelineStopped()
-                if rc != 0:
-                    tb, title, advice, cat = _classify_subprocess_error(record)
-                    set_state(record, state="error", error=tb, stage_label="Failed",
-                              error_title=title, error_advice=advice, error_category=cat)
-                    return
-                result = _read_pickle(record.tmpdir / "result.pkl")
-
-            with record.lock:
-                record.output_path = result.output_xlsx_path
-            set_state(record, state="done", progress=1.0, stage_label="✓ Complete")
-            record_run_duration("phase2", time.time() - phase_a_started_at - review_seconds)
+            _run_phase_b(record, interim, corrections=corrections)
         except (PipelineStopped, Phase2PipelineStopped):
             append_log(record, "Run cancelled by user.")
             set_state(record, state="stopped", stage_label="Stopped")
+            return
+        except _PipelineErrored as err:
+            set_state(record, state="error", error=err.tb, stage_label="Failed",
+                      error_title=err.title, error_advice=err.advice,
+                      error_category=err.category)
+            return
         except Exception as exc:
             _record_unexpected_error(record, exc)
+            return
+        set_state(record, state="done", progress=1.0, stage_label="✓ Complete")
+        record_run_duration("phase2", time.time() - phase_a_started_at - review_seconds)
+
+
+# ── Phase 2 helpers ───────────────────────────────────────────────────────────
+
+class _MismatchSurfaced(Exception):
+    """Internal sentinel — Phase A came back with mismatches to review."""
+    def __init__(self, groups: list[dict[str, Any]], phase_a_state: Any) -> None:
+        self.groups = groups
+        self.phase_a_state = phase_a_state
+
+
+class _PipelineErrored(Exception):
+    """Internal sentinel — the subprocess exited non-zero (≠ 99/42)."""
+    def __init__(self, tb: str, title: Optional[str],
+                 advice: Optional[str], category: Optional[str]) -> None:
+        self.tb = tb
+        self.title = title
+        self.advice = advice
+        self.category = category
+
+
+def _run_phase_a(record: JobRecord, directory_path: str,
+                 inputs: Phase2Inputs) -> Any:
+    """Run Phase A in subprocess (or in-process under AIC_INPROCESS)."""
+    if _inprocess():
+        with _redirect_stdout(record, STAGE_PROGRESS_PHASE2, STAGE_LABELS_PHASE2):
+            try:
+                return run_phase_a(
+                    Path(directory_path), inputs, stop_event=record.stop_event,
+                )
+            except MismatchReviewNeeded as exc:
+                raise _MismatchSurfaced(exc.groups, exc.phase_a_state) from None
+
+    _write_pickle(record.tmpdir / "input.pkl", {
+        "directory_path": directory_path,
+        "phase2_inputs":  inputs,
+    })
+    rc = _spawn_pipeline(record, "phase2_a",
+                         STAGE_PROGRESS_PHASE2, STAGE_LABELS_PHASE2)
+    if rc == 99:
+        raise Phase2PipelineStopped()
+    if rc == 42:
+        raise _MismatchSurfaced(
+            _read_pickle(record.tmpdir / "mismatch.pkl"),
+            _read_pickle(record.tmpdir / "interim.pkl"),
+        )
+    if rc != 0:
+        raise _PipelineErrored(*_classify_subprocess_error(record))
+    return _read_pickle(record.tmpdir / "interim.pkl")
+
+
+def _run_phase_b(record: JobRecord, interim: Any,
+                 corrections: list[dict[str, Any]]) -> None:
+    """Run Phase B; output_path is attached to the record on success."""
+    if _inprocess():
+        with _redirect_stdout(record, STAGE_PROGRESS_PHASE2, STAGE_LABELS_PHASE2):
+            result = run_phase_b(
+                interim, corrections, output_dir=record.tmpdir,
+                stop_event=record.stop_event,
+            )
+    else:
+        _write_pickle(record.tmpdir / "interim.pkl", interim)
+        _write_pickle(record.tmpdir / "corrections.pkl", corrections)
+        rc = _spawn_pipeline(record, "phase2_b",
+                             STAGE_PROGRESS_PHASE2, STAGE_LABELS_PHASE2)
+        if rc == 99:
+            raise Phase2PipelineStopped()
+        if rc != 0:
+            raise _PipelineErrored(*_classify_subprocess_error(record))
+        result = _read_pickle(record.tmpdir / "result.pkl")
+
+    with record.lock:
+        record.output_path = result.output_xlsx_path
 
 
 def _stash_mismatch(record: JobRecord, groups: list[dict[str, Any]],
