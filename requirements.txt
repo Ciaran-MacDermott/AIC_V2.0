@@ -1,0 +1,22 @@
+# FastAPI BFF
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.18
+pydantic>=2.9.0
+
+# Pipeline (mirrors AIC_PHASE1 main branch — keep versions in sync)
+pandas>=1.4.0
+numpy>=1.23.0
+openpyxl>=3.0.9
+xlsxwriter>=3.0.2
+nltk>=3.8.0
+rank-bm25>=0.2.2
+rapidfuzz>=3.2.0
+xgboost>=1.4.0
+scikit-learn>=0.24.0
+regex>=2023.0.0
+python-dateutil>=2.8.1
+
+# Tests
+pytest>=8.0.0
+httpx>=0.27.0

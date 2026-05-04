@@ -1,0 +1,166 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Design tokens ────────────────────────────────────────────────────── */
+:root {
+  --surface-0: #FFFFFF;
+  --surface-1: rgba(255, 255, 255, 0.72);
+  --surface-2: rgba(255, 255, 255, 0.55);
+  --hairline:  rgba(15, 23, 42, 0.06);
+  --hairline-strong: rgba(15, 23, 42, 0.10);
+  --ink-1:     #0F172A;
+  --ink-2:     #334155;
+  --ink-3:     #64748B;
+}
+
+/* ── Base typography ──────────────────────────────────────────────────── */
+/* Bump root from 16px to 17px so every rem-based Tailwind utility
+   (text-sm, p-5, gap-3, etc.) scales up one notch in lock-step. */
+html {
+  font-size: 17px;
+}
+html, body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv11", "ss01", "ss03";
+  font-variant-numeric: tabular-nums;
+}
+
+/* Aurora background — soft Circana-purple wash at the top, fading into
+   a warm off-white. Static SVG-free implementation: two layered radial
+   gradients on a fixed-position pseudo-element so it doesn't repaint on
+   every scroll. */
+body {
+  color: var(--ink-1);
+  background-color: #FAF7FB;
+  position: relative;
+  min-height: 100vh;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(60rem 32rem at 90% -10%, rgba(78, 16, 111, 0.16), transparent 60%),
+    radial-gradient(50rem 28rem at -10% 10%, rgba(139, 93, 175, 0.14), transparent 55%),
+    radial-gradient(40rem 26rem at 50% 110%, rgba(232, 219, 242, 0.45), transparent 60%),
+    linear-gradient(180deg, #FAF7FB 0%, #F6F3F8 100%);
+  pointer-events: none;
+}
+
+/* ── Component primitives (Tailwind @apply) ───────────────────────────── */
+@layer components {
+  /* Glass-style card surface — used by ProgressPanel, RunsSidebar, etc.
+     The translucent background lets the aurora bleed through on hover. */
+  .surface-card {
+    @apply rounded-2xl bg-white/80 border;
+    border-color: var(--hairline);
+    box-shadow:
+      0 1px 0 rgba(15, 23, 42, 0.02),
+      0 6px 24px -12px rgba(15, 23, 42, 0.10);
+    backdrop-filter: saturate(160%) blur(8px);
+    -webkit-backdrop-filter: saturate(160%) blur(8px);
+  }
+  .surface-card-quiet {
+    @apply rounded-xl bg-white border;
+    border-color: var(--hairline);
+  }
+
+  /* Buttons — share size + focus styles; colour comes from the caller. */
+  .btn-base {
+    @apply rounded-lg text-sm font-medium px-4 py-2 transition-all duration-150
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
+           focus-visible:ring-brand-600 focus-visible:ring-offset-white
+           active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed
+           disabled:active:scale-100;
+  }
+  .btn-primary {
+    @apply btn-base bg-brand-700 text-white hover:bg-brand-600;
+    box-shadow: 0 1px 2px rgba(78, 16, 111, 0.20), inset 0 1px 0 rgba(255,255,255,0.10);
+  }
+  .btn-success {
+    @apply btn-base bg-ok text-white hover:bg-okd;
+    box-shadow: 0 1px 2px rgba(5, 150, 105, 0.18), inset 0 1px 0 rgba(255,255,255,0.10);
+  }
+  .btn-secondary {
+    @apply btn-base bg-white text-zinc-800 border border-zinc-200 hover:bg-zinc-50 hover:border-zinc-300;
+  }
+  .btn-ghost {
+    @apply btn-base bg-transparent text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900;
+  }
+  .btn-danger-outline {
+    @apply btn-base border border-err text-err hover:bg-err hover:text-white;
+  }
+
+  /* Status chip — dot + text, used everywhere we surface a state. */
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium uppercase tracking-wide;
+  }
+  .chip-dot {
+    @apply h-1.5 w-1.5 rounded-full;
+  }
+
+  /* Slim app bar — fixed-height, hairline border, used in Header. */
+  .app-bar {
+    @apply sticky top-0 z-30 border-b backdrop-blur-md bg-white/70;
+    border-color: var(--hairline);
+  }
+}
+
+/* ── Motion ───────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: no-preference) {
+  .fade-in-up {
+    animation: fadeInUp 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+}
+
+/* ── AG Grid theme tweaks (Circana brand) ─────────────────────────────── */
+.ag-theme-quartz {
+  --ag-foreground-color:        #1F2937;
+  --ag-background-color:        #FFFFFF;
+  --ag-header-foreground-color: #FFFFFF;
+  --ag-header-background-color: #4E106F;
+  --ag-odd-row-background-color: #FAFAFB;
+  --ag-row-hover-color:         #F5F0FA;
+  --ag-selected-row-background-color: #E8DBF2;
+  --ag-border-color:            #EAEAEC;
+  --ag-font-size:               14px;
+  --ag-font-family: 'Inter', system-ui, sans-serif;
+  --ag-header-column-separator-display: none;
+  --ag-cell-horizontal-padding: 14px;
+}
+.ag-theme-quartz .ag-header {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* Per-row flag styling from the Streamlit AgGrid JsCode functions. */
+.ag-theme-quartz .row-edited {
+  background-color: #F3E8FF !important;
+  border-left: 3px solid #4E106F !important;
+}
+.ag-theme-quartz .cell-high-priority {
+  background-color: #FFC7CE !important;
+  color: #9C0006 !important;
+  font-weight: 700;
+  text-align: center;
+}
+.ag-theme-quartz .cell-low-score-no-ml {
+  background-color: #FFEB9C !important;
+  color: #374151 !important;
+}
+.ag-theme-quartz .cell-note {
+  background-color: #FFF2CC !important;
+  color: #7F6000 !important;
+  font-style: italic;
+}

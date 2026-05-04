@@ -1,0 +1,15 @@
+.venv
+__pycache__/
+*.pyc
+.pytest_cache
+.DS_Store
+*.log
+
+# Frontend artefacts (covered by web/.gitignore but listed here too for safety)
+web/node_modules
+web/.next
+web/out
+web/tsconfig.tsbuildinfo
+
+# Reference snapshot of upstream Streamlit pages — handy locally, not for git
+.reference/
