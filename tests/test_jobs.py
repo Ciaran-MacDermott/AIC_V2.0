@@ -141,11 +141,12 @@ def test_idle_qc_ready_run_evicts_after_ttl(tmp_path: Path) -> None:
 def test_active_states_are_immune_to_idle_eviction(tmp_path: Path) -> None:
     """Worker-alive states must never be evicted regardless of how long
     they've gone without an API touch — the worker thread still owns
-    the tmpdir and (for mismatch_pending) the pipeline lock."""
+    the tmpdir.  mismatch_pending is intentionally NOT in this set: the
+    worker now parks with a finite timeout, so the record becoming
+    stale means the user genuinely abandoned the review."""
     reg = jobs.JobRegistry(ttl_seconds=0)
 
-    for state in ("queued", "running", "finalizing",
-                  "post_qc_running", "mismatch_pending"):
+    for state in ("queued", "running", "finalizing", "post_qc_running"):
         d = tmp_path / state
         d.mkdir()
         rec = reg.create(phase="phase1", tmpdir=d)
@@ -159,6 +160,27 @@ def test_active_states_are_immune_to_idle_eviction(tmp_path: Path) -> None:
         assert rec.run_id in reg._jobs, (      # noqa: SLF001
             f"state={state!r} must survive idle eviction"
         )
+
+
+def test_abandoned_mismatch_pending_evicts(tmp_path: Path) -> None:
+    """A run sitting at mismatch_pending past the idle TTL must be
+    reaped — the parked worker has timed out by then."""
+    reg = jobs.JobRegistry(ttl_seconds=0)
+
+    abandoned_dir = tmp_path / "abandoned_mp"
+    abandoned_dir.mkdir()
+    rec = reg.create(phase="phase2", tmpdir=abandoned_dir)
+    jobs.set_state(rec, state="mismatch_pending")
+
+    time.sleep(0.01)
+
+    other = tmp_path / "other"
+    other.mkdir()
+    reg.create(phase="phase1", tmpdir=other)
+
+    assert rec.run_id not in reg._jobs, (  # noqa: SLF001
+        "abandoned mismatch_pending must be reaped by idle-TTL"
+    )
 
 
 def test_get_refreshes_last_touched(tmp_run_dir: Path) -> None:

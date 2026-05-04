@@ -127,16 +127,16 @@ class JobRecord:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
-# States where a worker thread is actively executing or parked.  Records
-# in these states are NEVER evicted by TTL — only an explicit DELETE or
-# the worker reaching a non-active state can release them.  Note that
-# `mismatch_pending` is included here even though it's user-driven: the
-# Phase 2 worker is parked on resume_event holding PIPELINE_LOCK, so
-# evicting the record without signalling stop_event would leak the
-# thread.  Stop-on-timeout for stuck mismatch reviews is a separate
-# follow-up.
+# States where a worker thread is actively executing or parked on a
+# bounded wait.  Records in these states are NEVER evicted by TTL —
+# only an explicit DELETE or the worker reaching a non-active state
+# can release them.  `mismatch_pending` is intentionally NOT in here:
+# the worker now parks with a finite timeout (worker.MISMATCH_REVIEW_TIMEOUT_S),
+# so a record sitting in mismatch_pending past the idle TTL means
+# either the user genuinely abandoned it or the worker has already
+# exited — either way it's safe to reap.
 _ACTIVE_STATES = frozenset({
-    "queued", "running", "finalizing", "post_qc_running", "mismatch_pending",
+    "queued", "running", "finalizing", "post_qc_running",
 })
 
 

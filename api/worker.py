@@ -54,6 +54,15 @@ from api.pipeline_phase2 import (
 )
 
 
+# Hard cap on how long a Phase 2 worker will park on resume_event waiting
+# for the analyst to submit mismatch corrections.  After this, we treat
+# the review as abandoned, mark the run as stopped, and let the parked
+# thread exit so the JobRecord becomes evictable by the idle-TTL reaper.
+# Two hours covers a reasonable lunch break + meeting; longer than that
+# and the analyst should re-upload.
+MISMATCH_REVIEW_TIMEOUT_S = 2 * 60 * 60
+
+
 # ── Stage stream ─────────────────────────────────────────────────────────────
 
 class _LogStream:
@@ -372,11 +381,23 @@ def run_phase2_worker(record: JobRecord, directory_path: str,
 
     # ── User review (no slot held — other users can run while we wait) ────
     review_started = time.time()
-    record.resume_event.wait()
+    resumed = record.resume_event.wait(timeout=MISMATCH_REVIEW_TIMEOUT_S)
     review_seconds = time.time() - review_started
     if record.stop_event.is_set():
         append_log(record, "Run cancelled by user.")
         set_state(record, state="stopped", stage_label="Stopped")
+        return
+    if not resumed:
+        # Analyst never came back.  Mark the run stopped and exit so
+        # the parked thread doesn't sit on the heap forever.  The
+        # JobRecord is now evictable — idle-TTL will sweep it up.
+        append_log(
+            record,
+            f"Mismatch review abandoned — no corrections received within "
+            f"{MISMATCH_REVIEW_TIMEOUT_S // 3600}h.",
+        )
+        set_state(record, state="stopped",
+                  stage_label="Stopped — review timed out")
         return
     with record.lock:
         corrections = list(record.mismatch_corrections)

@@ -279,6 +279,54 @@ def test_phase2_stop_while_paused(client: TestClient, monkeypatch, tmp_path: Pat
     )
 
 
+def test_phase2_review_timeout_marks_run_stopped(
+    client: TestClient, monkeypatch, tmp_path: Path
+) -> None:
+    """When the analyst never resolves a mismatch_pending review, the
+    parked worker must time out, set state=stopped, and exit so the
+    record becomes evictable by idle-TTL."""
+    interim = Phase2InterimState(
+        df=pd.DataFrame({"x": [1]}),
+        duplicate_dimkeys=pd.DataFrame(),
+        pipeline_context={},
+    )
+    groups = [{
+        "model_suffix":   "",
+        "brand_col":      "BRAND",
+        "tool_brand_col": "TOOL_BRAND",
+        "mismatch_df":    pd.DataFrame([{"BRAND": "ACME", "TOOL_BRAND": "ACMI"}]),
+        "parent_col":     None,
+    }]
+
+    def fake_phase_a(directory_path, inputs, stop_event=None):
+        raise MismatchReviewNeeded(groups=groups, phase_a_state=interim)
+
+    def never_called_phase_b(*a, **kw):
+        raise AssertionError("phase B must not run when review times out")
+
+    from api import worker as worker_mod
+    monkeypatch.setattr(worker_mod, "run_phase_a", fake_phase_a)
+    monkeypatch.setattr(worker_mod, "run_phase_b", never_called_phase_b)
+    # Tiny timeout so the test runs in milliseconds, not 2 hours.
+    monkeypatch.setattr(worker_mod, "MISMATCH_REVIEW_TIMEOUT_S", 0.1)
+
+    r = client.post(
+        "/api/phase2/runs",
+        files={"zip": ("input.zip", _make_zip_bytes(), "application/zip")},
+        data={"config": json.dumps(_default_config())},
+    )
+    run_id = r.json()["run_id"]
+
+    _wait_until(
+        lambda: jobs.registry.get(run_id).state == "stopped",
+        msg="worker did not reach state=stopped after review timeout",
+    )
+
+    record = jobs.registry.get(run_id)
+    log_text = "\n".join(record.log_lines)
+    assert "abandoned" in log_text.lower(), log_text
+
+
 def test_phase2_invalid_zip_extension(client: TestClient) -> None:
     r = client.post(
         "/api/phase2/runs",
