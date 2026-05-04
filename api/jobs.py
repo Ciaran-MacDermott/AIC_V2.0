@@ -2,17 +2,19 @@
 Job registry for long-running pipeline runs.
 
 Each run gets a JobRecord that the worker thread mutates as it makes
-progress. The HTTP layer reads the record's snapshot via getters, so
+progress.  The HTTP layer reads the record's snapshot via getters, so
 multiple concurrent polls don't see torn state.
 
-Process-wide pipeline lock: the legacy ml_package code mutates module
-globals (sys.path) and the parent Streamlit app uses os.chdir. To stay
-safe across worker threads we serialise pipeline execution with a single
-Lock. Only one run executes the heavy stages at a time; queued runs sit
-in `queued` state until the lock is free.
+Concurrency: every pipeline stage runs in a child process spawned by
+``api.worker._spawn_pipeline``, isolated from ml_package's global-state
+mutations.  RUN_SLOTS (a BoundedSemaphore) caps how many can be in
+flight at once; runs beyond that sit in state="queued" until a slot
+opens, with queue_position + ETA surfaced via /api/runs/{id}.
 
-A future refactor can drop this lock by running each pipeline in a
-multiprocessing.Process instead — out of scope for this pass.
+Eviction: idle runs (state ∉ _ACTIVE_STATES) are reaped after
+ttl_seconds of inactivity by both inline registry calls and a
+background reaper thread.  Worker progress and any API touch refresh
+the record's last_touched timestamp.
 """
 
 from __future__ import annotations
@@ -30,19 +32,28 @@ from typing import Any, Optional
 # Concurrent-run cap.  Each pipeline subprocess takes roughly 200–400 MB
 # resident plus a few seconds of cold-start; on a 4-vCPU box, 5 in flight
 # is comfortable while keeping plenty of headroom for FastAPI itself.
-# The Streamlit version was effectively limited to 1 (PIPELINE_LOCK), so
-# anything ≥ 2 is already a step up.  Beyond MAX_RUN_SLOTS, runs queue
-# at state="queued" and the ETA logic kicks in.
+# Beyond MAX_RUN_SLOTS, runs queue at state="queued" and the ETA logic
+# in compute_queue_info() kicks in.
 MAX_RUN_SLOTS = 5
 RUN_SLOTS = threading.BoundedSemaphore(MAX_RUN_SLOTS)
 
-# Back-compat shim: anything that historically held PIPELINE_LOCK
-# (single-tenant guarantee) now sits behind RUN_SLOTS instead.  Some
-# existing tests and the in-process fallback path still import the name.
-PIPELINE_LOCK = threading.Lock()
-
 # Soft cap on how many recent log lines we hand back in a status snapshot.
 LOG_TAIL_SIZE = 60
+
+# States where the worker thread is actively executing or parked on a
+# bounded wait — records here are immune to idle-TTL eviction.
+# `mismatch_pending` is intentionally absent: the Phase 2 worker now
+# parks with a 2h timeout, so a stale mismatch_pending record means
+# either the user abandoned it or the worker has already exited.
+_ACTIVE_STATES = frozenset({
+    "queued", "running", "finalizing", "post_qc_running",
+})
+
+_RUNNING_STATES = frozenset({
+    "running", "finalizing", "post_qc_running",
+})
+
+_TERMINAL_STATES = frozenset({"done", "error", "stopped"})
 
 # Rolling window of recent run durations (seconds), per phase.  Used to
 # project an ETA for queued runs in the UI — much more useful than a
@@ -127,19 +138,6 @@ class JobRecord:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
-# States where a worker thread is actively executing or parked on a
-# bounded wait.  Records in these states are NEVER evicted by TTL —
-# only an explicit DELETE or the worker reaching a non-active state
-# can release them.  `mismatch_pending` is intentionally NOT in here:
-# the worker now parks with a finite timeout (worker.MISMATCH_REVIEW_TIMEOUT_S),
-# so a record sitting in mismatch_pending past the idle TTL means
-# either the user genuinely abandoned it or the worker has already
-# exited — either way it's safe to reap.
-_ACTIVE_STATES = frozenset({
-    "queued", "running", "finalizing", "post_qc_running",
-})
-
-
 class JobRegistry:
     """In-memory store of JobRecords with idle-TTL eviction."""
 
@@ -183,6 +181,11 @@ class JobRegistry:
             self._evict_expired_locked()
             return list(self._jobs.values())
 
+    def evict_expired(self) -> None:
+        """Public entry point for the background reaper."""
+        with self._mu:
+            self._evict_expired_locked()
+
     # Caller must hold self._mu.
     def _evict_expired_locked(self) -> None:
         now = time.time()
@@ -223,7 +226,7 @@ def set_state(record: JobRecord, *, state: Optional[str] = None,
         record.last_touched = time.time()
         if state is not None:
             record.state = state
-            if state in ("done", "error", "stopped"):
+            if state in _TERMINAL_STATES:
                 record.finished_at = time.time()
         if progress is not None:
             record.progress = progress
@@ -289,9 +292,7 @@ def compute_queue_info(record: JobRecord) -> tuple[Optional[int], Optional[int],
         [r for r in active if r.state == "queued"],
         key=lambda r: r.started_at,
     )
-    running_count = sum(
-        1 for r in active if r.state in ("running", "finalizing", "post_qc_running")
-    )
+    running_count = sum(1 for r in active if r.state in _RUNNING_STATES)
 
     try:
         position_in_queue = queued_sorted.index(record)
@@ -339,8 +340,7 @@ def _reap_loop() -> None:
     while True:
         time.sleep(60)
         try:
-            with registry._mu:                    # noqa: SLF001
-                registry._evict_expired_locked()  # noqa: SLF001
+            registry.evict_expired()
         except Exception:
             # The reaper must never die — swallow and try again.
             pass

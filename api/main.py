@@ -8,9 +8,14 @@ the whole app runs on a single port — same shape as data_ingester.
 
 from __future__ import annotations
 
+import io
+import json
+import os
+import pickle
 import shutil
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -54,8 +59,6 @@ from api.schemas import (
 
 app = FastAPI(title="AIC API")
 
-import os as _os
-
 # CORS:
 #   * Dev: Next runs on :3000 and the BFF on :8000 — pre-flight needs to
 #     pass for cross-origin fetch to work.
@@ -64,7 +67,7 @@ import os as _os
 #   * Other deployments (frontend behind a separate domain) can extend
 #     the allow-list via AIC_CORS_ORIGINS=https://foo,https://bar.
 _extra_origins = [
-    o.strip() for o in _os.environ.get("AIC_CORS_ORIGINS", "").split(",")
+    o.strip() for o in os.environ.get("AIC_CORS_ORIGINS", "").split(",")
     if o.strip()
 ]
 app.add_middleware(
@@ -80,7 +83,7 @@ app.add_middleware(
 # BFF.  200 MB is comfortably above the largest realistic Phase 1
 # input we've seen and well under the per-process headroom.  Override
 # via env var if a workflow ever needs more.
-MAX_UPLOAD_BYTES = int(_os.environ.get("AIC_MAX_UPLOAD_MB", "200")) * 1024 * 1024
+MAX_UPLOAD_BYTES = int(os.environ.get("AIC_MAX_UPLOAD_MB", "200")) * 1024 * 1024
 
 
 @app.middleware("http")
@@ -107,6 +110,30 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+# ── Tiny input-validation helpers ────────────────────────────────────────────
+# Most Phase 1 / Phase 2 routes share the same shape: check a filename
+# extension, parse a Phase2Config form field.  Hoisting both as named
+# helpers keeps each route to its actual job (extract → start worker).
+
+def _require_xlsx(upload: UploadFile, *, field: str = "xlsx") -> None:
+    name = (upload.filename or "").lower()
+    if not (name.endswith(".xlsx") or name.endswith(".xls")):
+        raise HTTPException(400, f"{field} file must be .xlsx or .xls")
+
+
+def _require_zip(upload: UploadFile, *, field: str = "zip") -> None:
+    name = (upload.filename or "").lower()
+    if not name.endswith(".zip"):
+        raise HTTPException(400, f"{field} file must be .zip")
+
+
+def _parse_phase2_config(config: str) -> Phase2Config:
+    try:
+        return Phase2Config.model_validate_json(config)
+    except ValueError as exc:
+        raise HTTPException(400, f"Invalid config JSON: {exc}")
+
+
 # ── Phase 1 lifecycle ────────────────────────────────────────────────────────
 
 @app.post("/api/phase1/runs", response_model=RunCreated)
@@ -114,8 +141,7 @@ async def create_phase1_run(
     xlsx: UploadFile = File(...),
     csv:  UploadFile = File(...),
 ) -> RunCreated:
-    if not xlsx.filename or not (xlsx.filename.endswith(".xlsx") or xlsx.filename.endswith(".xls")):
-        raise HTTPException(400, "xlsx file must be .xlsx or .xls")
+    _require_xlsx(xlsx)
     if not csv.filename or not csv.filename.endswith(".csv"):
         raise HTTPException(400, "csv file must be .csv")
 
@@ -142,8 +168,7 @@ async def create_phase1_run_from_zip(zip: UploadFile = File(...)) -> RunCreated:
     on disk so a Phase 2 run started from this run's tmpdir can reuse
     them without re-uploading.
     """
-    if not zip.filename or not zip.filename.lower().endswith(".zip"):
-        raise HTTPException(400, "zip file must be .zip")
+    _require_zip(zip)
 
     tmpdir = Path(tempfile.mkdtemp(prefix="aic_p1_"))
     try:
@@ -170,7 +195,6 @@ def list_runs() -> ActiveRuns:
     them a chance to wait for an in-flight phase2 instead of racing
     for the lock.
     """
-    import time
     now = time.time()
     runs = sorted(jobs.registry.list_active(), key=lambda r: r.started_at)
     return ActiveRuns(runs=[
@@ -195,30 +219,12 @@ def get_run(run_id: str) -> JobStatus:
         raise HTTPException(404, "Run not found")
 
     snap = jobs.snapshot(record)
-    import time
     elapsed = (snap["finished_at"] or time.time()) - snap["started_at"]
-    return JobStatus(
-        run_id=snap["run_id"],
-        phase=snap["phase"],
-        state=snap["state"],
-        progress=snap["progress"],
-        stage_label=snap["stage_label"],
-        started_at=snap["started_at"],
-        elapsed_s=elapsed,
-        error=snap["error"],
-        error_title=snap["error_title"],
-        error_advice=snap["error_advice"],
-        error_category=snap["error_category"],
-        qc_sheet_keys=snap["qc_sheet_keys"],
-        mismatch_count=snap["mismatch_count"],
-        post_qc_categories=snap["post_qc_categories"],
-        parent_run_id=snap["parent_run_id"],
-        log_cursor=snap["log_cursor"],
-        log_tail=snap["log_tail"],
-        queue_position=snap["queue_position"],
-        queue_depth=snap["queue_depth"],
-        eta_seconds=snap["eta_seconds"],
-    )
+    # snapshot() returns a dict with the same field names JobStatus expects;
+    # the only field not on the snapshot is the derived elapsed_s.
+    return JobStatus(elapsed_s=elapsed, **{
+        k: v for k, v in snap.items() if k != "finished_at"
+    })
 
 
 @app.get("/api/runs/{run_id}/logs", response_model=LogChunk)
@@ -295,14 +301,13 @@ def qc_finalize(run_id: str) -> QcFinalized:
     # Heavy frames live on disk between qc_ready and finalize so they
     # don't pin parent memory during the analyst's review.  Single
     # pickle.load here (~10–50 ms typical) and we have everything.
-    import pickle as _pickle
     from api.pipeline import Phase1Payload
-    with open(record.pipeline_payload["_heavy_path"], "rb") as _f:
-        _heavy = _pickle.load(_f)
+    with open(record.pipeline_payload["_heavy_path"], "rb") as f:
+        heavy = pickle.load(f)
     payload = Phase1Payload(
-        FINAL=_heavy["FINAL"],
-        FLAT_FILE_OUT=_heavy["FLAT_FILE_OUT"],
-        meta=_heavy["meta"],
+        FINAL=heavy["FINAL"],
+        FLAT_FILE_OUT=heavy["FLAT_FILE_OUT"],
+        meta=heavy["meta"],
         dictEnsemble=record.pipeline_payload["dictEnsemble"],
     )
 
@@ -366,16 +371,12 @@ def download_bundle(run_id: str) -> FileResponse:
     post_qc/.  metadata.json captures run identity so a downstream
     audit can match the bundle back to the run that produced it.
     """
-    import io as _io
-    import json as _json
-    import zipfile as _zipfile
-
     record = jobs.registry.get(run_id)
     if record is None:
         raise HTTPException(404, "Run not found")
 
     bundle_path = record.tmpdir / "bundle.zip"
-    with _zipfile.ZipFile(bundle_path, "w", _zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as zf:
         if record.output_path and record.output_path.exists():
             output_name = (
                 "qc.xlsx" if record.phase == "phase1" else "output.xlsx"
@@ -387,22 +388,22 @@ def download_bundle(run_id: str) -> FileResponse:
         if record.qc_edits:
             zf.writestr(
                 "qc_edits.json",
-                _json.dumps(record.qc_edits, indent=2, sort_keys=True),
+                json.dumps(record.qc_edits, indent=2, sort_keys=True),
             )
         if record.mismatch_corrections:
             zf.writestr(
                 "mismatch_corrections.json",
-                _json.dumps(record.mismatch_corrections, indent=2),
+                json.dumps(record.mismatch_corrections, indent=2),
             )
 
         # Post-QC outputs are themselves a zip on disk; nest them under a
         # subdirectory so the bundle stays a single archive.
         if record.post_qc_zip_path and record.post_qc_zip_path.exists():
-            with _zipfile.ZipFile(record.post_qc_zip_path) as inner:
+            with zipfile.ZipFile(record.post_qc_zip_path) as inner:
                 for member in inner.namelist():
                     zf.writestr(f"post_qc/{member}", inner.read(member))
 
-        zf.writestr("metadata.json", _json.dumps({
+        zf.writestr("metadata.json", json.dumps({
             "run_id":        record.run_id,
             "phase":         record.phase,
             "state":         record.state,
@@ -432,12 +433,8 @@ async def create_phase2_run(
     resulting directory for File_For_Mapping_QC.xlsx, ModelInfo.txt,
     Attributes.txt and AttributeValues.txt.
     """
-    if not zip.filename or not zip.filename.lower().endswith(".zip"):
-        raise HTTPException(400, "zip file must be .zip")
-    try:
-        cfg = Phase2Config.model_validate_json(config)
-    except ValueError as exc:
-        raise HTTPException(400, f"Invalid config JSON: {exc}")
+    _require_zip(zip)
+    cfg = _parse_phase2_config(config)
 
     tmpdir = Path(tempfile.mkdtemp(prefix="aic_p2_"))
     try:
@@ -466,8 +463,7 @@ _EMPTY_SCAN_ID = ""   # kept in the response model for API stability
 
 @app.post("/api/phase2/scan", response_model=Phase2ScanResult)
 async def scan_phase2_zip(zip: UploadFile = File(...)) -> Phase2ScanResult:
-    if not zip.filename or not zip.filename.lower().endswith(".zip"):
-        raise HTTPException(400, "zip file must be .zip")
+    _require_zip(zip)
 
     scan_dir = Path(tempfile.mkdtemp(prefix="aic_p2_scan_"))
     try:
@@ -483,11 +479,7 @@ async def scan_phase2_zip(zip: UploadFile = File(...)) -> Phase2ScanResult:
 
 @app.post("/api/phase2/scan/xlsx", response_model=Phase2ScanResult)
 async def scan_phase2_xlsx_route(xlsx: UploadFile = File(...)) -> Phase2ScanResult:
-    if not xlsx.filename or not (
-        xlsx.filename.lower().endswith(".xlsx")
-        or xlsx.filename.lower().endswith(".xls")
-    ):
-        raise HTTPException(400, "xlsx file must be .xlsx or .xls")
+    _require_xlsx(xlsx)
 
     scan_dir = Path(tempfile.mkdtemp(prefix="aic_p2_scan_"))
     target = scan_dir / xlsx.filename
@@ -515,15 +507,8 @@ async def create_phase2_run_from_files(
     attribute_values: UploadFile = File(...),
     config:           str        = Form(...),
 ) -> RunCreated:
-    if not xlsx.filename or not (
-        xlsx.filename.lower().endswith(".xlsx")
-        or xlsx.filename.lower().endswith(".xls")
-    ):
-        raise HTTPException(400, "xlsx file must be .xlsx or .xls")
-    try:
-        cfg = Phase2Config.model_validate_json(config)
-    except ValueError as exc:
-        raise HTTPException(400, f"Invalid config JSON: {exc}")
+    _require_xlsx(xlsx)
+    cfg = _parse_phase2_config(config)
 
     tmpdir = Path(tempfile.mkdtemp(prefix="aic_p2_"))
     project_dir = tmpdir / "extracted"
@@ -556,10 +541,7 @@ async def create_phase2_run_from_parent(
     parent = jobs.registry.get(parent_run_id)
     if parent is None:
         raise HTTPException(404, "Parent run not found")
-    try:
-        cfg = Phase2Config.model_validate_json(config)
-    except ValueError as exc:
-        raise HTTPException(400, f"Invalid config JSON: {exc}")
+    cfg = _parse_phase2_config(config)
 
     tmpdir = Path(tempfile.mkdtemp(prefix="aic_p2_"))
     project_dir = tmpdir / "extracted"
@@ -666,11 +648,7 @@ async def post_qc_re_upload(run_id: str, xlsx: UploadFile = File(...)) -> PostQc
             409,
             f"Run is in state '{record.state}', post-QC re-upload requires 'done'",
         )
-    if not xlsx.filename or not (
-        xlsx.filename.lower().endswith(".xlsx")
-        or xlsx.filename.lower().endswith(".xls")
-    ):
-        raise HTTPException(400, "xlsx file must be .xlsx or .xls")
+    _require_xlsx(xlsx)
 
     edited_path = record.tmpdir / "output_edited.xlsx"
     edited_path.write_bytes(await xlsx.read())

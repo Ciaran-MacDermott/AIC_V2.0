@@ -12,14 +12,8 @@ Usage:
 
 The tmpdir holds both inputs (input.pkl) and outputs (result.pkl,
 interim.pkl, mismatch.pkl, error.pkl).  Stdout streams live to the
-parent for the log box.
-
-Exit codes:
-    0   success
-    42  Phase 2A produced mismatches needing user review
-    99  pipeline received SIGTERM (user pressed Stop)
-    1   any other exception (traceback dumped to stderr, exception
-        pickled to error.pkl for the parent to classify)
+parent for the log box.  Exit codes are defined as ExitCode below
+and consumed by api.worker._spawn_pipeline.
 """
 
 from __future__ import annotations
@@ -40,6 +34,17 @@ os.environ.setdefault("PYTHONUNBUFFERED", "1")
 # Mirror the parent's NLTK bootstrap before importing anything that
 # might touch the corpora.  api/__init__.py does this on import.
 import api  # noqa: F401
+
+
+# ── Exit codes ───────────────────────────────────────────────────────────────
+# Shared with api.worker so both sides agree on the contract.
+
+class ExitCode:
+    OK             = 0
+    ERROR          = 1
+    USAGE          = 2
+    REVIEW_NEEDED  = 42   # Phase 2A only — mismatches surfaced
+    STOPPED        = 99   # SIGTERM observed mid-pipeline
 
 
 # ── Stop-event plumbing ──────────────────────────────────────────────────────
@@ -79,19 +84,33 @@ def _dump_error(tmpdir: Path, exc: BaseException) -> None:
 
 # ── Commands ─────────────────────────────────────────────────────────────────
 
-def _cmd_phase1(tmpdir: Path) -> int:
-    from api.pipeline import run_phase1, PipelineStopped
-    args = _load_pkl(tmpdir / "input.pkl")
+def _safe_run(tmpdir: Path, fn, *, stopped_excs: tuple = ()) -> int:
+    """
+    Run ``fn(tmpdir)`` returning a clean ExitCode.  Maps cooperative-stop
+    exceptions to STOPPED, anything else to ERROR (with the exception
+    pickled into error.pkl so the parent can classify() it).  Mismatch
+    handling is per-command so it lives in the caller.
+    """
     try:
-        payload = run_phase1(args["excel_path"], args["csv_path"], stop_event=_STOP)
-    except PipelineStopped:
-        return 99
+        return fn(tmpdir)
+    except stopped_excs:
+        return ExitCode.STOPPED
     except BaseException as exc:
         traceback.print_exc()
         _dump_error(tmpdir, exc)
-        return 1
-    _dump_pkl(tmpdir / "result.pkl", payload)
-    return 0
+        return ExitCode.ERROR
+
+
+def _cmd_phase1(tmpdir: Path) -> int:
+    from api.pipeline import run_phase1, PipelineStopped
+
+    def _do(td: Path) -> int:
+        args = _load_pkl(td / "input.pkl")
+        payload = run_phase1(args["excel_path"], args["csv_path"], stop_event=_STOP)
+        _dump_pkl(td / "result.pkl", payload)
+        return ExitCode.OK
+
+    return _safe_run(tmpdir, _do, stopped_excs=(PipelineStopped,))
 
 
 def _cmd_phase2_a(tmpdir: Path) -> int:
@@ -100,59 +119,57 @@ def _cmd_phase2_a(tmpdir: Path) -> int:
         PipelineStopped,
         run_phase_a,
     )
-    args = _load_pkl(tmpdir / "input.pkl")
-    try:
-        interim = run_phase_a(
-            Path(args["directory_path"]),
-            args["phase2_inputs"],
-            stop_event=_STOP,
-        )
-    except MismatchReviewNeeded as exc:
-        _dump_pkl(tmpdir / "interim.pkl", exc.phase_a_state)
-        _dump_pkl(tmpdir / "mismatch.pkl", exc.groups)
-        return 42
-    except PipelineStopped:
-        return 99
-    except BaseException as exc:
-        traceback.print_exc()
-        _dump_error(tmpdir, exc)
-        return 1
-    _dump_pkl(tmpdir / "interim.pkl", interim)
-    return 0
+
+    def _do(td: Path) -> int:
+        args = _load_pkl(td / "input.pkl")
+        try:
+            interim = run_phase_a(
+                Path(args["directory_path"]),
+                args["phase2_inputs"],
+                stop_event=_STOP,
+            )
+        except MismatchReviewNeeded as exc:
+            # Not a failure — Phase 2A's documented "needs user review"
+            # path.  Stash the interim state so Phase 2B can resume.
+            _dump_pkl(td / "interim.pkl", exc.phase_a_state)
+            _dump_pkl(td / "mismatch.pkl", exc.groups)
+            return ExitCode.REVIEW_NEEDED
+        _dump_pkl(td / "interim.pkl", interim)
+        return ExitCode.OK
+
+    return _safe_run(tmpdir, _do, stopped_excs=(PipelineStopped,))
 
 
 def _cmd_phase2_b(tmpdir: Path) -> int:
     from api.pipeline_phase2 import PipelineStopped, run_phase_b
-    interim = _load_pkl(tmpdir / "interim.pkl")
-    corrections = _load_pkl(tmpdir / "corrections.pkl")
-    try:
+
+    def _do(td: Path) -> int:
+        interim = _load_pkl(td / "interim.pkl")
+        corrections = _load_pkl(td / "corrections.pkl")
         result = run_phase_b(
-            interim, corrections, output_dir=tmpdir, stop_event=_STOP,
+            interim, corrections, output_dir=td, stop_event=_STOP,
         )
-    except PipelineStopped:
-        return 99
-    except BaseException as exc:
-        traceback.print_exc()
-        _dump_error(tmpdir, exc)
-        return 1
-    _dump_pkl(tmpdir / "result.pkl", result)
-    return 0
+        _dump_pkl(td / "result.pkl", result)
+        return ExitCode.OK
+
+    return _safe_run(tmpdir, _do, stopped_excs=(PipelineStopped,))
 
 
 def _cmd_post_qc(tmpdir: Path) -> int:
     from phase3_package.pipeline import run_post_qc
-    args = _load_pkl(tmpdir / "input.pkl")
-    try:
+
+    def _do(td: Path) -> int:
+        args = _load_pkl(td / "input.pkl")
         _, category_splits = run_post_qc(
             excel_path=args["edited_xlsx_path"],
             is_custom_collapse=args["is_custom_collapse"],
         )
-    except BaseException as exc:
-        traceback.print_exc()
-        _dump_error(tmpdir, exc)
-        return 1
-    _dump_pkl(tmpdir / "result.pkl", category_splits)
-    return 0
+        _dump_pkl(td / "result.pkl", category_splits)
+        return ExitCode.OK
+
+    # Post-QC has no cooperative-stop check — the run is short and the
+    # legacy code doesn't take a stop_event.  Errors still get caught.
+    return _safe_run(tmpdir, _do)
 
 
 _COMMANDS = {
@@ -169,7 +186,7 @@ def main() -> int:
             "usage: python -m api.run_pipeline {phase1|phase2_a|phase2_b|post_qc} <tmpdir>",
             file=sys.stderr,
         )
-        return 2
+        return ExitCode.USAGE
     cmd, tmpdir = sys.argv[1], Path(sys.argv[2])
     return _COMMANDS[cmd](tmpdir)
 

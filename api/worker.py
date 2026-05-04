@@ -16,6 +16,7 @@ take effect.
 
 from __future__ import annotations
 
+import io
 import os
 import pickle
 import subprocess
@@ -23,9 +24,10 @@ import sys
 import threading
 import time
 import traceback
+import zipfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 from api.errors import classify
 from api.jobs import (
@@ -35,7 +37,7 @@ from api.jobs import (
     record_run_duration,
     set_state,
 )
-from api import pipeline as _pipeline_mod
+from api import pipeline
 from api.pipeline import (
     PipelineStopped,
     STAGE_LABELS,
@@ -52,6 +54,7 @@ from api.pipeline_phase2 import (
     run_phase_b,
     serialise_mismatch_groups,
 )
+from api.run_pipeline import ExitCode
 
 
 # Hard cap on how long a Phase 2 worker will park on resume_event waiting
@@ -221,21 +224,19 @@ def _inprocess() -> bool:
     return os.environ.get("AIC_INPROCESS") == "1"
 
 
+@contextmanager
 def _redirect_stdout(record: JobRecord, progress_table: dict[str, float],
                      label_table: dict[str, str]):
-    """Context manager: install _LogStream as stdout/stderr."""
-    @contextmanager
-    def _ctx():
-        stream = _LogStream(record, progress_table, label_table)
-        old_out, old_err = sys.stdout, sys.stderr
-        sys.stdout = stream
-        sys.stderr = stream
-        try:
-            yield stream
-        finally:
-            stream.flush()
-            sys.stdout, sys.stderr = old_out, old_err
-    return _ctx()
+    """Install _LogStream as stdout/stderr for the in-process pipeline path."""
+    stream = _LogStream(record, progress_table, label_table)
+    old_out, old_err = sys.stdout, sys.stderr
+    sys.stdout = stream
+    sys.stderr = stream
+    try:
+        yield stream
+    finally:
+        stream.flush()
+        sys.stdout, sys.stderr = old_out, old_err
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -246,47 +247,43 @@ def run_phase1_worker(record: JobRecord, excel_path: str, csv_path: str) -> None
     set_state(record, state="running", stage_label="Queued…")
     with _run_slot(record):
         set_state(record, stage_label="Starting…")
-        ml_started_at = time.time()
+        started_at = time.time()
         try:
-            if _inprocess():
-                with _redirect_stdout(record, STAGE_PROGRESS, STAGE_LABELS):
-                    payload = _pipeline_mod.run_phase1(
-                        excel_path, csv_path, stop_event=record.stop_event,
-                    )
-                _attach_phase1_payload(record, payload)
-            else:
-                _write_pickle(record.tmpdir / "input.pkl", {
-                    "excel_path": excel_path, "csv_path": csv_path,
-                })
-                rc = _spawn_pipeline(record, "phase1", STAGE_PROGRESS, STAGE_LABELS)
-                if rc == 99:
-                    raise PipelineStopped()
-                if rc != 0:
-                    tb, title, advice, cat = _classify_subprocess_error(record)
-                    set_state(record, state="error", error=tb, stage_label="Failed",
-                              error_title=title, error_advice=advice, error_category=cat)
-                    return
-                payload = _read_pickle(record.tmpdir / "result.pkl")
-                _attach_phase1_payload(record, payload)
-
-            set_state(
-                record,
-                state="qc_ready",
-                progress=STAGE_PROGRESS["qc_ready"],
-                stage_label=STAGE_LABELS["qc_ready"],
-            )
-            record_run_duration("phase1", time.time() - ml_started_at)
+            payload = _execute_phase1(record, excel_path, csv_path)
         except PipelineStopped:
-            append_log(record, "Run cancelled by user.")
-            set_state(record, state="stopped", stage_label="Stopped")
+            _record_stopped(record)
+            return
+        except _PipelineErrored as err:
+            _record_subprocess_error(record, err)
+            return
         except Exception as exc:
-            tb = traceback.format_exc()
-            for ln in tb.splitlines():
-                append_log(record, ln)
-            friendly = classify(exc)
-            set_state(record, state="error", error=tb, stage_label="Failed",
-                      error_title=friendly.title, error_advice=friendly.advice,
-                      error_category=friendly.category)
+            _record_unexpected_error(record, exc)
+            return
+
+        _attach_phase1_payload(record, payload)
+        set_state(record, state="qc_ready",
+                  progress=STAGE_PROGRESS["qc_ready"],
+                  stage_label=STAGE_LABELS["qc_ready"])
+        record_run_duration("phase1", time.time() - started_at)
+
+
+def _execute_phase1(record: JobRecord, excel_path: str, csv_path: str) -> Any:
+    """In-process or subprocess Phase 1 execution; returns the Phase1Payload."""
+    if _inprocess():
+        with _redirect_stdout(record, STAGE_PROGRESS, STAGE_LABELS):
+            return pipeline.run_phase1(
+                excel_path, csv_path, stop_event=record.stop_event,
+            )
+
+    _write_pickle(record.tmpdir / "input.pkl", {
+        "excel_path": excel_path, "csv_path": csv_path,
+    })
+    rc = _spawn_pipeline(record, "phase1", STAGE_PROGRESS, STAGE_LABELS)
+    if rc == ExitCode.STOPPED:
+        raise PipelineStopped()
+    if rc != ExitCode.OK:
+        raise _PipelineErrored(*_classify_subprocess_error(record))
+    return _read_pickle(record.tmpdir / "result.pkl")
 
 
 def _attach_phase1_payload(record: JobRecord, payload: Any) -> None:
@@ -332,78 +329,76 @@ def run_phase2_worker(record: JobRecord, directory_path: str,
     """
     Phase 2 orchestration.  Three control-flow shapes:
 
-    1. No mismatch (happy path) — Phase A and Phase B both run while the
-       slot is held, so we don't churn the semaphore between them.
-    2. Mismatch surfaced — drop the slot, park the worker on
-       resume_event while the user reviews, reacquire a fresh slot for
-       Phase B once corrections arrive.  This means a long review never
-       blocks other users.
-    3. Error / stop at any point — release slot, mark state, return.
+    1. No mismatch (happy path) — Phase A and Phase B both run while
+       the slot is held; semaphore is held end-to-end.
+    2. Mismatch surfaced — slot released, worker parks on resume_event
+       (with a 2h cap), reacquires a fresh slot for Phase B once the
+       analyst submits corrections.  Long reviews never block others.
+    3. Error / stop at any point — slot released, state recorded by
+       _capture_phase_errors, control returns to the caller.
     """
     set_state(record, state="running", stage_label="Queued…")
-    phase_a_started_at = time.time()
+    started_at = time.time()
     review_seconds = 0.0
-
     interim: Any = None
-    needs_review = False
 
     # ── Phase A (+ Phase B if no mismatch) ────────────────────────────────
-    with _run_slot(record):
-        set_state(record, stage_label="Starting…")
-        try:
-            interim = _run_phase_a(record, directory_path, inputs)
-        except _MismatchSurfaced as ms:
-            _stash_mismatch(record, ms.groups, inputs, ms.phase_a_state)
-            set_state(record, state="mismatch_pending",
-                      progress=STAGE_PROGRESS_PHASE2["awaiting user review"],
-                      stage_label=STAGE_LABELS_PHASE2["awaiting user review"])
-            needs_review = True
-        except (PipelineStopped, Phase2PipelineStopped):
-            append_log(record, "Run cancelled by user.")
-            set_state(record, state="stopped", stage_label="Stopped")
-            return
-        except _PipelineErrored as err:
-            set_state(record, state="error", error=err.tb, stage_label="Failed",
-                      error_title=err.title, error_advice=err.advice,
-                      error_category=err.category)
-            return
-        except Exception as exc:
-            _record_unexpected_error(record, exc)
-            return
-
-        if not needs_review:
-            # Happy path — keep the slot for Phase B.  Avoids handing it
-            # to a queued user just to take it back two seconds later.
+    try:
+        with _run_slot(record):
+            set_state(record, stage_label="Starting…")
             try:
-                _run_phase_b(record, interim, corrections=[])
-            except (PipelineStopped, Phase2PipelineStopped):
-                append_log(record, "Run cancelled by user.")
-                set_state(record, state="stopped", stage_label="Stopped")
+                with _capture_phase_errors(record):
+                    interim = _run_phase_a(record, directory_path, inputs)
+            except _MismatchSurfaced as ms:
+                _stash_mismatch(record, ms.groups, inputs, ms.phase_a_state)
+                set_state(record, state="mismatch_pending",
+                          progress=STAGE_PROGRESS_PHASE2["awaiting user review"],
+                          stage_label=STAGE_LABELS_PHASE2["awaiting user review"])
+            else:
+                # Happy path — keep the slot for Phase B and we're done.
+                with _capture_phase_errors(record):
+                    _run_phase_b(record, interim, corrections=[])
+                set_state(record, state="done", progress=1.0, stage_label="✓ Complete")
+                record_run_duration("phase2", time.time() - started_at)
                 return
-            except _PipelineErrored as err:
-                set_state(record, state="error", error=err.tb, stage_label="Failed",
-                          error_title=err.title, error_advice=err.advice,
-                          error_category=err.category)
-                return
-            except Exception as exc:
-                _record_unexpected_error(record, exc)
-                return
-            set_state(record, state="done", progress=1.0, stage_label="✓ Complete")
-            record_run_duration("phase2", time.time() - phase_a_started_at)
-            return
+    except _PhaseAborted:
+        return
 
-    # ── User review (no slot held — other users can run while we wait) ────
+    # ── User review (no slot held) ────────────────────────────────────────
+    review_seconds = _wait_for_mismatch_resolve(record)
+    if record.state in ("stopped", "error"):
+        return
+
+    with record.lock:
+        corrections = list(record.mismatch_corrections)
+        interim = record.phase2_interim or _read_pickle(record.tmpdir / "interim.pkl")
+    set_state(record, state="running", stage_label="Resuming with corrections…")
+
+    # ── Phase B (resumed) ─────────────────────────────────────────────────
+    try:
+        with _run_slot(record):
+            with _capture_phase_errors(record):
+                _run_phase_b(record, interim, corrections=corrections)
+            set_state(record, state="done", progress=1.0, stage_label="✓ Complete")
+            record_run_duration("phase2", time.time() - started_at - review_seconds)
+    except _PhaseAborted:
+        return
+
+
+def _wait_for_mismatch_resolve(record: JobRecord) -> float:
+    """
+    Park on resume_event until the analyst submits corrections (or 2h
+    elapses, or stop_event fires).  Returns seconds spent waiting so the
+    caller can subtract it from the run duration recorded for ETA.
+    Side-effect: sets state=stopped on timeout or stop.
+    """
     review_started = time.time()
     resumed = record.resume_event.wait(timeout=MISMATCH_REVIEW_TIMEOUT_S)
-    review_seconds = time.time() - review_started
+    elapsed = time.time() - review_started
+
     if record.stop_event.is_set():
-        append_log(record, "Run cancelled by user.")
-        set_state(record, state="stopped", stage_label="Stopped")
-        return
-    if not resumed:
-        # Analyst never came back.  Mark the run stopped and exit so
-        # the parked thread doesn't sit on the heap forever.  The
-        # JobRecord is now evictable — idle-TTL will sweep it up.
+        _record_stopped(record)
+    elif not resumed:
         append_log(
             record,
             f"Mismatch review abandoned — no corrections received within "
@@ -411,30 +406,7 @@ def run_phase2_worker(record: JobRecord, directory_path: str,
         )
         set_state(record, state="stopped",
                   stage_label="Stopped — review timed out")
-        return
-    with record.lock:
-        corrections = list(record.mismatch_corrections)
-        interim = record.phase2_interim or _read_pickle(record.tmpdir / "interim.pkl")
-    set_state(record, state="running", stage_label="Resuming with corrections…")
-
-    # ── Phase B (resumed) ─────────────────────────────────────────────────
-    with _run_slot(record):
-        try:
-            _run_phase_b(record, interim, corrections=corrections)
-        except (PipelineStopped, Phase2PipelineStopped):
-            append_log(record, "Run cancelled by user.")
-            set_state(record, state="stopped", stage_label="Stopped")
-            return
-        except _PipelineErrored as err:
-            set_state(record, state="error", error=err.tb, stage_label="Failed",
-                      error_title=err.title, error_advice=err.advice,
-                      error_category=err.category)
-            return
-        except Exception as exc:
-            _record_unexpected_error(record, exc)
-            return
-        set_state(record, state="done", progress=1.0, stage_label="✓ Complete")
-        record_run_duration("phase2", time.time() - phase_a_started_at - review_seconds)
+    return elapsed
 
 
 # ── Phase 2 helpers ───────────────────────────────────────────────────────────
@@ -456,6 +428,43 @@ class _PipelineErrored(Exception):
         self.category = category
 
 
+class _PhaseAborted(Exception):
+    """
+    Internal sentinel raised by _capture_phase_errors after it has
+    already transitioned the record into a terminal state.  The
+    surrounding worker just needs to unwind — the user-facing state
+    was set inside the context manager.
+    """
+
+
+@contextmanager
+def _capture_phase_errors(record: JobRecord):
+    """
+    Convert the standard pipeline-failure exceptions into a state
+    transition, then re-raise as _PhaseAborted so the surrounding
+    worker can unwind cleanly.  The stop / error / unexpected branches
+    each have one canonical recording helper, so adding a new failure
+    mode means editing one place, not three.
+
+    _MismatchSurfaced is a control-flow signal (Phase A's documented
+    "needs user review" path), not an error — let it propagate so the
+    surrounding worker can park the run on resume_event.
+    """
+    try:
+        yield
+    except (PipelineStopped, Phase2PipelineStopped):
+        _record_stopped(record)
+        raise _PhaseAborted from None
+    except _MismatchSurfaced:
+        raise
+    except _PipelineErrored as err:
+        _record_subprocess_error(record, err)
+        raise _PhaseAborted from None
+    except Exception as exc:
+        _record_unexpected_error(record, exc)
+        raise _PhaseAborted from None
+
+
 def _run_phase_a(record: JobRecord, directory_path: str,
                  inputs: Phase2Inputs) -> Any:
     """Run Phase A in subprocess (or in-process under AIC_INPROCESS)."""
@@ -474,14 +483,14 @@ def _run_phase_a(record: JobRecord, directory_path: str,
     })
     rc = _spawn_pipeline(record, "phase2_a",
                          STAGE_PROGRESS_PHASE2, STAGE_LABELS_PHASE2)
-    if rc == 99:
+    if rc == ExitCode.STOPPED:
         raise Phase2PipelineStopped()
-    if rc == 42:
+    if rc == ExitCode.REVIEW_NEEDED:
         raise _MismatchSurfaced(
             _read_pickle(record.tmpdir / "mismatch.pkl"),
             _read_pickle(record.tmpdir / "interim.pkl"),
         )
-    if rc != 0:
+    if rc != ExitCode.OK:
         raise _PipelineErrored(*_classify_subprocess_error(record))
     return _read_pickle(record.tmpdir / "interim.pkl")
 
@@ -500,9 +509,9 @@ def _run_phase_b(record: JobRecord, interim: Any,
         _write_pickle(record.tmpdir / "corrections.pkl", corrections)
         rc = _spawn_pipeline(record, "phase2_b",
                              STAGE_PROGRESS_PHASE2, STAGE_LABELS_PHASE2)
-        if rc == 99:
+        if rc == ExitCode.STOPPED:
             raise Phase2PipelineStopped()
-        if rc != 0:
+        if rc != ExitCode.OK:
             raise _PipelineErrored(*_classify_subprocess_error(record))
         result = _read_pickle(record.tmpdir / "result.pkl")
 
@@ -538,6 +547,21 @@ def _record_unexpected_error(record: JobRecord, exc: BaseException) -> None:
               error_category=friendly.category)
 
 
+def _record_subprocess_error(record: JobRecord,
+                             err: "_PipelineErrored",
+                             stage_label: str = "Failed") -> None:
+    """Translate a subprocess _PipelineErrored into a state=error transition."""
+    set_state(record, state="error", error=err.tb, stage_label=stage_label,
+              error_title=err.title, error_advice=err.advice,
+              error_category=err.category)
+
+
+def _record_stopped(record: JobRecord) -> None:
+    """Standard state=stopped transition with the cancellation log line."""
+    append_log(record, "Run cancelled by user.")
+    set_state(record, state="stopped", stage_label="Stopped")
+
+
 def start_phase2(record: JobRecord, directory_path: str,
                  inputs: Phase2Inputs) -> threading.Thread:
     thread = threading.Thread(
@@ -564,61 +588,66 @@ except ImportError:  # fast-test environments stub phase3 modules
 
 def run_post_qc_worker(record: JobRecord, edited_xlsx_path: str,
                        is_custom_collapse: bool) -> None:
-    import io as _io
-    import zipfile as _zipfile
-
     set_state(record, state="post_qc_running",
               progress=0.05, stage_label="Re-collapsing edited workbook…")
 
     with _run_slot(record):
         try:
-            if _inprocess():
-                with _redirect_stdout(record, STAGE_PROGRESS_PHASE2, STAGE_LABELS_PHASE2):
-                    if run_post_qc is None:
-                        raise RuntimeError("phase3_package.run_post_qc is not available")
-                    _, category_splits = run_post_qc(
-                        excel_path=edited_xlsx_path,
-                        is_custom_collapse=is_custom_collapse,
-                    )
-            else:
-                _write_pickle(record.tmpdir / "input.pkl", {
-                    "edited_xlsx_path":  edited_xlsx_path,
-                    "is_custom_collapse": is_custom_collapse,
-                })
-                rc = _spawn_pipeline(record, "post_qc",
-                                     STAGE_PROGRESS_PHASE2, STAGE_LABELS_PHASE2)
-                if rc != 0:
-                    tb, title, advice, cat = _classify_subprocess_error(record)
-                    set_state(record, state="error", error=tb,
-                              stage_label="Post-QC failed",
-                              error_title=title, error_advice=advice, error_category=cat)
-                    return
-                category_splits = _read_pickle(record.tmpdir / "result.pkl")
-
-            zip_path = record.tmpdir / "post_qc.zip"
-            with _zipfile.ZipFile(zip_path, "w", _zipfile.ZIP_DEFLATED) as zf:
-                for category, df in category_splits.items():
-                    csv_buf = _io.BytesIO()
-                    df.to_csv(csv_buf, index=False)
-                    zf.writestr(f"{category}.csv", csv_buf.getvalue())
-                with record.lock:
-                    log_text = "\n".join(record.log_lines)
-                zf.writestr("output_QClogs.txt", log_text)
-
-            with record.lock:
-                record.post_qc_zip_path = zip_path
-                record.post_qc_categories = sorted(category_splits.keys())
-            set_state(record, state="post_qc_done", progress=1.0,
-                      stage_label="✓ Post-QC export ready")
+            category_splits = _execute_post_qc(
+                record, edited_xlsx_path, is_custom_collapse,
+            )
+        except _PipelineErrored as err:
+            _record_subprocess_error(record, err, stage_label="Post-QC failed")
+            return
         except Exception as exc:
-            tb = traceback.format_exc()
-            for ln in tb.splitlines():
-                append_log(record, ln)
-            friendly = classify(exc)
-            set_state(record, state="error", error=tb,
-                      stage_label="Post-QC failed",
-                      error_title=friendly.title, error_advice=friendly.advice,
-                      error_category=friendly.category)
+            _record_unexpected_error(record, exc)
+            return
+
+        _bundle_post_qc_outputs(record, category_splits)
+        set_state(record, state="post_qc_done", progress=1.0,
+                  stage_label="✓ Post-QC export ready")
+
+
+def _execute_post_qc(record: JobRecord, edited_xlsx_path: str,
+                     is_custom_collapse: bool) -> dict[str, Any]:
+    """In-process or subprocess run; returns the per-category splits dict."""
+    if _inprocess():
+        with _redirect_stdout(record, STAGE_PROGRESS_PHASE2, STAGE_LABELS_PHASE2):
+            if run_post_qc is None:
+                raise RuntimeError("phase3_package.run_post_qc is not available")
+            _, category_splits = run_post_qc(
+                excel_path=edited_xlsx_path,
+                is_custom_collapse=is_custom_collapse,
+            )
+            return category_splits
+
+    _write_pickle(record.tmpdir / "input.pkl", {
+        "edited_xlsx_path":   edited_xlsx_path,
+        "is_custom_collapse": is_custom_collapse,
+    })
+    rc = _spawn_pipeline(record, "post_qc",
+                         STAGE_PROGRESS_PHASE2, STAGE_LABELS_PHASE2)
+    if rc != ExitCode.OK:
+        raise _PipelineErrored(*_classify_subprocess_error(record))
+    return _read_pickle(record.tmpdir / "result.pkl")
+
+
+def _bundle_post_qc_outputs(record: JobRecord,
+                            category_splits: dict[str, Any]) -> None:
+    """Pack one CSV per category + the running log into post_qc.zip."""
+    zip_path = record.tmpdir / "post_qc.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for category, df in category_splits.items():
+            csv_buf = io.BytesIO()
+            df.to_csv(csv_buf, index=False)
+            zf.writestr(f"{category}.csv", csv_buf.getvalue())
+        with record.lock:
+            log_text = "\n".join(record.log_lines)
+        zf.writestr("output_QClogs.txt", log_text)
+
+    with record.lock:
+        record.post_qc_zip_path = zip_path
+        record.post_qc_categories = sorted(category_splits.keys())
 
 
 def start_post_qc(record: JobRecord, edited_xlsx_path: str,
