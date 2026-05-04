@@ -1,0 +1,52 @@
+# syntax=docker/dockerfile:1.6
+
+# ── Stage 1: build the Next.js static export ──────────────────────────────
+FROM node:20-alpine AS web-build
+WORKDIR /web
+
+# Install dependencies first so package.json edits don't bust the cache.
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+# Build the static export — produces /web/out/.
+COPY web/ ./
+RUN npm run build
+
+
+# ── Stage 2: Python runtime, FastAPI serves the static export ────────────
+FROM python:3.11-slim
+WORKDIR /app
+
+# Build deps for some wheels (rapidfuzz / xgboost on a few platforms).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install Python deps first — single biggest layer, cache it on its own.
+COPY requirements.txt ./
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
+
+# Copy app source.  The bundled NLTK corpora ship in the image so the
+# walled-garden boot path still resolves without internet.
+COPY api/         ./api/
+COPY ml_package/  ./ml_package/
+COPY phase3_package/ ./phase3_package/
+COPY aic_utils.py ./
+COPY nltk_data/   ./nltk_data/
+
+# The static frontend lands where api/main.py mounts it (web/out at /).
+COPY --from=web-build /web/out ./web/out
+
+# Belt-and-braces: the bootstrap reads NLTK_DATA when set; setting it
+# explicitly means a child process (e.g. a future CLI tool) inherits.
+ENV NLTK_DATA=/app/nltk_data
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 8000
+
+# Healthcheck so Docker Desktop shows green when the API is reachable.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8000/api/health || exit 1
+
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

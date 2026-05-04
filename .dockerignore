@@ -1,0 +1,27 @@
+# Anything not needed inside the image — keeps build context small + builds fast.
+
+.git
+.gitignore
+.venv
+.pytest_cache
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Frontend build artefacts — Stage 1 produces them fresh.
+web/node_modules
+web/.next
+web/out
+web/tsconfig.tsbuildinfo
+
+# Tests + their fixtures don't need to ship in the runtime image.
+tests/
+examples/
+
+# Local docs / writeups
+*.docx
+docs/
+
+# OS clutter
+.DS_Store
+**/.DS_Store
