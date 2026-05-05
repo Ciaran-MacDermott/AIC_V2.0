@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -57,7 +58,37 @@ from api.schemas import (
 )
 
 
-app = FastAPI(title="AIC API")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """
+    Graceful-shutdown plumbing.
+
+    On SIGTERM / SIGINT (uvicorn's default reload, container stop, ctrl-c)
+    FastAPI runs the post-yield branch.  We:
+      • signal every running JobRecord to stop and unpark any worker
+        sleeping on resume_event (Phase 2 mismatch review)
+      • give the worker threads a few seconds to observe the stop and
+        let their subprocesses exit cleanly (the subprocess sees
+        SIGTERM and converts it to ExitCode.STOPPED)
+
+    We don't try to wait for every worker to fully drain — uvicorn caps
+    its own grace window — but signalling them lets the most common
+    case (idle slot, pipeline mid-stage) reach a terminal state instead
+    of being torn out from under the analyst.
+    """
+    yield
+    _signal_running_workers_stop()
+
+
+def _signal_running_workers_stop() -> None:
+    for record in jobs.registry.list_active():
+        if record.state in {"queued", "running", "finalizing",
+                            "post_qc_running", "mismatch_pending"}:
+            record.stop_event.set()
+            record.resume_event.set()
+
+
+app = FastAPI(title="AIC API", lifespan=_lifespan)
 
 # CORS:
 #   * Dev: Next runs on :3000 and the BFF on :8000 — pre-flight needs to
