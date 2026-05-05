@@ -12,12 +12,10 @@ import type {
 import { Header } from "@/components/header";
 import { FileSlot } from "@/components/upload";
 import { ProgressPanel } from "@/components/progress-panel";
-import { LogTail } from "@/components/log-tail";
+import { FullLogTail } from "@/components/log-tail";
 import { MismatchForm } from "@/components/mismatch-form";
 import { StageStepper } from "@/components/stage-stepper";
-import { RunsSidebar } from "@/components/runs-sidebar";
 import { RunErrorDialog } from "@/components/run-error-dialog";
-import { recordRun, updateRunState } from "@/lib/recent";
 import {
   Phase2AdvancedConfig,
   type BrandOverrideRow,
@@ -93,8 +91,16 @@ function Phase2Page() {
   const [postQcFile, setPostQcFile] = useState<File | null>(null);
   const [postQcSubmitting, setPostQcSubmitting] = useState(false);
   const [postQcDownloadUrl, setPostQcDownloadUrl] = useState<string | null>(null);
+  // Post-QC re-upload runs as a standalone job so it isn't blocked by the
+  // original Phase 2 run being evicted (60min idle TTL or BFF restart).
+  // Tracked separately from `runId` so the user can still re-download the
+  // original output.xlsx while post-QC progresses.
+  const [postQcRunId, setPostQcRunId] = useState<string | null>(null);
+  const [postQcStatus, setPostQcStatus] = useState<JobStatus | null>(null);
 
   const pollRef = useRef<number | null>(null);
+  const postQcPollRef = useRef<number | null>(null);
+  const [logsOpen, setLogsOpen] = useState(false);
 
   // Scan zip on pick → autodetect RAW UPC + populate dropdowns.  Mirrors
   // the Streamlit page's _load_cols_from_dir auto-population.
@@ -120,6 +126,32 @@ function Phase2Page() {
     return () => { cancelled = true; };
   }, [zipFile]);
 
+  // Handoff flow (?parentRunId=…): scan the parent's QC workbook so the
+  // advanced-config dropdowns (BRAND/TOOL_BRAND/manufacturer rule editor)
+  // populate without the user having to re-upload anything.  Mirrors the
+  // zipFile scan above; both paths land on the same `scan` state so the
+  // child components don't care which one ran.
+  useEffect(() => {
+    if (!parentRunId) return;
+    let cancelled = false;
+    setScanning(true);
+    api.scanPhase2FromParent(parentRunId)
+      .then((s) => {
+        if (cancelled) return;
+        setScan(s);
+        setRawUpcCol(s.default_upc_col || "RAW_BRAND");
+        if (s.default_manufacturer_col) {
+          setBrandOverride((prev) => ({
+            ...prev,
+            raw_manufacturer_col: s.default_manufacturer_col,
+          }));
+        }
+      })
+      .catch(() => { if (!cancelled) setScan(null); })
+      .finally(() => { if (!cancelled) setScanning(false); });
+    return () => { cancelled = true; };
+  }, [parentRunId]);
+
   // ── Poll status while a run is alive ──────────────────────────────────
   useEffect(() => {
     if (!runId) return;
@@ -131,14 +163,11 @@ function Phase2Page() {
         const s = await api.status(runId);
         if (cancelled) return;
         setStatus(s);
-        updateRunState(runId, s.state);
 
         if (s.state === "done") {
           setDownloadUrl(`/api/runs/${runId}/artifacts/output.xlsx`);
-          // Don't return — keep polling so post_qc transitions are observed.
-        }
-        if (s.state === "post_qc_done") {
-          setPostQcDownloadUrl(`/api/runs/${runId}/artifacts/post_qc.zip`);
+          // Phase 2 done is terminal here — post-QC runs as a standalone
+          // job tracked via postQcRunId, not on this record.
           return;
         }
         if (s.state === "mismatch_pending" && groups === null) {
@@ -154,7 +183,18 @@ function Phase2Page() {
         pollRef.current = window.setTimeout(tick, POLL_MS);
       } catch (e) {
         if (cancelled) return;
-        setError(e instanceof Error ? e.message : String(e));
+        // Stale link / cleaned-up run — silently reset rather than
+        // surfacing "Run not found" to a user re-opening a bookmark.
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.startsWith("404")) {
+          setRunId(null);
+          setStatus(null);
+          setDownloadUrl(null);
+          setGroups(null);
+          router.replace("/phase2");
+          return;
+        }
+        setError(msg);
       }
     }
 
@@ -163,7 +203,38 @@ function Phase2Page() {
       cancelled = true;
       if (pollRef.current) window.clearTimeout(pollRef.current);
     };
-  }, [runId, groups]);
+  }, [runId, groups, router]);
+
+  // Independent poll for the standalone post-QC run.  Lives on its own
+  // run_id so the original Phase 2 record's state isn't disturbed.
+  useEffect(() => {
+    if (!postQcRunId) return;
+    let cancelled = false;
+
+    async function tick() {
+      if (cancelled || !postQcRunId) return;
+      try {
+        const s = await api.status(postQcRunId);
+        if (cancelled) return;
+        setPostQcStatus(s);
+        if (s.state === "post_qc_done") {
+          setPostQcDownloadUrl(`/api/runs/${postQcRunId}/artifacts/post_qc.zip`);
+          return;
+        }
+        if (TERMINAL.has(s.state)) return;
+        postQcPollRef.current = window.setTimeout(tick, POLL_MS);
+      } catch (e) {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    }
+
+    tick();
+    return () => {
+      cancelled = true;
+      if (postQcPollRef.current) window.clearTimeout(postQcPollRef.current);
+    };
+  }, [postQcRunId]);
 
   function buildConfig(): Phase2Config {
     // Convert the row-shaped rules editor (Streamlit's UX) into the
@@ -198,11 +269,6 @@ function Phase2Page() {
           ? await api.startPhase2(zipFile, cfg)
           : (() => { throw new Error("Pick a zip or arrive via Phase 1"); })();
       setRunId(run_id);
-      recordRun({
-        run_id, phase: "phase2", created_at: Date.now(),
-        label: zipFile?.name ?? (parentRunId ? `from ${parentRunId.slice(0, 6)}` : undefined),
-        parent_run_id: parentRunId || undefined,
-      });
       router.replace(`/phase2?runId=${encodeURIComponent(run_id)}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -233,9 +299,15 @@ function Phase2Page() {
   }
 
   async function onReset() {
-    if (runId) {
-      try { await api.remove(runId); } catch { /* ignore */ }
-    }
+    // Best-effort delete every run we know about for this workflow so
+    // the server's tmpdirs (and the in-memory registry slots) come back
+    // immediately — analysts don't have to wait for the 60min idle-TTL
+    // sweep.  Errors are swallowed: a 404 just means the run was
+    // already evicted, which is the desired terminal state anyway.
+    const ids = [runId, postQcRunId, parentRunId || null].filter(Boolean) as string[];
+    await Promise.all(
+      ids.map((id) => api.remove(id).catch(() => undefined)),
+    );
     setRunId(null);
     setStatus(null);
     setGroups(null);
@@ -245,16 +317,22 @@ function Phase2Page() {
     setDownloadUrl(null);
     setPostQcFile(null);
     setPostQcDownloadUrl(null);
+    setPostQcRunId(null);
+    setPostQcStatus(null);
     router.replace("/phase2");
   }
 
   async function onPostQcUpload() {
-    if (!runId || !postQcFile) return;
+    if (!postQcFile) return;
     setPostQcSubmitting(true);
     setError(null);
     try {
-      await api.postQcUpload(runId, postQcFile);
-      // The poller picks up state=post_qc_running and then post_qc_done.
+      // Standalone post-QC creates a fresh run for the edited xlsx; not
+      // affected by the original Phase 2 run being evicted (60min idle
+      // TTL) or a BFF restart between Phase 2 finishing and the upload.
+      const { run_id } = await api.postQcStandalone(postQcFile, customCollapse);
+      setPostQcRunId(run_id);
+      // Polling picks up here via the postQcRunId effect.
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -265,6 +343,8 @@ function Phase2Page() {
   const isRunning  = !!status && (status.state === "running" || status.state === "queued");
   const isPaused   = !!status && status.state === "mismatch_pending";
   const isTerminal = !!status && TERMINAL.has(status.state);
+  const isError    = !!status && status.state === "error";
+  const isStopped  = !!status && status.state === "stopped";
 
   return (
     <>
@@ -274,8 +354,6 @@ function Phase2Page() {
         subtitle="Upload your project zip, review any BRAND / TOOL_BRAND mismatches, and download the cleaned workbook."
       />
       <main className="mx-auto max-w-5xl px-6 pb-12">
-
-      <RunsSidebar currentRunId={runId} />
 
       {!runId && (
         <section className="surface-card p-7 mb-6 space-y-6 fade-in-up">
@@ -406,21 +484,37 @@ function Phase2Page() {
           {downloadUrl && (
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 backdrop-blur text-emerald-900 p-5 mb-4 fade-in-up">
               <div className="font-medium mb-2">Cleaned output ready.</div>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <a
                   href={api.downloadUrl(downloadUrl)}
                   className="btn-primary inline-flex items-center"
                 >
                   Download output.xlsx
                 </a>
+                {/* Run log alongside the xlsx — analysts use the log to
+                    inform their QC pass before re-uploading.  Same UTF-8
+                    log content the progress panel exposes; surfaced here
+                    too so it's a single click from the cleaned output. */}
+                {runId && (
+                  <a
+                    href={api.downloadUrl(`/api/runs/${runId}/artifacts/log.txt`)}
+                    className="btn-secondary inline-flex items-center"
+                  >
+                    Download run log (.txt)
+                  </a>
+                )}
               </div>
+              <p className="mt-2 text-xs text-emerald-900/70">
+                Grab the log alongside the workbook — useful for QC review before re-uploading below.
+              </p>
             </div>
           )}
 
           {/* Post-QC re-upload: edit Cleaned Output in Excel, re-upload here,
-              receive a zip of per-category CSVs.  Mirrors the Streamlit
-              "Re-upload edited output.xlsx" box on lines 1416-1469. */}
-          {downloadUrl && status?.state !== "post_qc_done" && (
+              receive a zip of per-category CSVs.  Submits to the standalone
+              endpoint so it isn't blocked by the original Phase 2 run being
+              evicted from the registry. */}
+          {downloadUrl && !postQcDownloadUrl && (
             <div className="surface-card p-6 mb-4 space-y-4">
               <div className="font-medium text-zinc-800">Post-QC: edit & re-upload</div>
               <p className="text-xs text-zinc-500">
@@ -435,12 +529,22 @@ function Phase2Page() {
               />
               <button
                 type="button"
-                disabled={!postQcFile || postQcSubmitting}
+                disabled={!postQcFile || postQcSubmitting || !!postQcRunId}
                 onClick={onPostQcUpload}
                 className="btn-success"
               >
-                {postQcSubmitting ? "Uploading…" : "Finalise & Export"}
+                {postQcSubmitting
+                  ? "Uploading…"
+                  : postQcRunId
+                    ? (postQcStatus?.stage_label ?? "Processing…")
+                    : "Finalise & Export"}
               </button>
+              {postQcStatus && postQcStatus.state === "error" && (
+                <div className="text-xs text-red-700">
+                  {postQcStatus.error_title ?? "Post-QC failed"}
+                  {postQcStatus.error_advice ? ` — ${postQcStatus.error_advice}` : ""}
+                </div>
+              )}
             </div>
           )}
 
@@ -448,11 +552,20 @@ function Phase2Page() {
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 backdrop-blur text-emerald-900 p-5 mb-4 fade-in-up">
               <div className="font-medium mb-2">
                 Post-QC export ready —{" "}
-                {status?.post_qc_categories?.length ?? 0} categor
-                {(status?.post_qc_categories?.length ?? 0) === 1 ? "y" : "ies"}
+                {postQcStatus?.post_qc_categories?.length ?? 0} categor
+                {(postQcStatus?.post_qc_categories?.length ?? 0) === 1 ? "y" : "ies"}
               </div>
+              <p className="text-xs text-emerald-900/70 mb-3">
+                Workflow complete — clicking download will start the file and reset this page.
+              </p>
+              {/* Final download — Phase 3 zip already bundles per-category
+                  CSVs + the run log (output_QClogs.txt).  After the click
+                  the workflow is genuinely done; auto-reset wipes server
+                  tmpdirs and clears the page so analysts don't linger on
+                  a stale screen. */}
               <a
                 href={api.downloadUrl(postQcDownloadUrl)}
+                onClick={() => { window.setTimeout(() => { void onReset(); }, 1500); }}
                 className="btn-primary inline-flex items-center"
               >
                 Download AIC_Phase2_3_exports.zip
@@ -460,7 +573,43 @@ function Phase2Page() {
             </div>
           )}
 
-          <LogTail lines={status.log_tail} />
+          {/* Logs collapsed by default — same disclosure pattern as the
+              Phase 1 page so the run UI stays focused on stage + progress.
+              The dot in the summary picks up the run's current state. */}
+          {status.log_cursor > 0 && runId && (
+            <details
+              open={logsOpen}
+              onToggle={(e) => setLogsOpen((e.target as HTMLDetailsElement).open)}
+              className="group surface-card-quiet mt-3 px-4 py-2 text-xs text-zinc-600"
+            >
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 select-none">
+                <span className="flex items-center gap-2">
+                  <span className={`inline-block h-1.5 w-1.5 rounded-full ${
+                    isError ? "bg-err"
+                    : isStopped ? "bg-zinc-400"
+                    : isPaused ? "bg-amber-500"
+                    : isRunning ? "bg-brand-500"
+                    : "bg-emerald-500"
+                  }`} />
+                  <span>
+                    Pipeline output
+                    <span className="text-zinc-400"> · </span>
+                    <span className="tabular-nums">{status.log_cursor}</span> log lines
+                  </span>
+                </span>
+                <span className="text-zinc-400 group-open:hidden">Show ▾</span>
+                <span className="text-zinc-400 hidden group-open:inline">Hide ▴</span>
+              </summary>
+              {/* Mount-on-open: FullLogTail fetches the whole buffer, not
+                  just the live 60-line tail in the status response.  This
+                  is what the analyst needs for QC of the cleaned output. */}
+              <div className="mt-3">
+                {logsOpen && (
+                  <FullLogTail runId={runId} active={isRunning || isPaused} />
+                )}
+              </div>
+            </details>
+          )}
           <div className="mt-4 flex items-center gap-2">
             {isRunning && (
               <button

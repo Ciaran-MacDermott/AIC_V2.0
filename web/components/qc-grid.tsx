@@ -1,20 +1,20 @@
 "use client";
 
 import { AgGridReact } from "ag-grid-react";
-import {
-  ClientSideRowModelModule,
-  ModuleRegistry,
-  type CellClassParams,
-  type CellClassRules,
-  type CellValueChangedEvent,
-  type ColDef,
-  type ICellEditorParams,
+import type {
+  CellClassParams,
+  CellClassRules,
+  CellValueChangedEvent,
+  ColDef,
+  ICellEditorParams,
 } from "ag-grid-community";
 import { useMemo, useRef } from "react";
 
 import type { QcSheetPayload } from "@/lib/types";
 
-ModuleRegistry.registerModules([ClientSideRowModelModule]);
+// ag-grid-community v32 (package install) auto-registers community modules.
+// Calling ModuleRegistry.registerModules from the package surface triggers
+// AG Grid's "mixing modules and packages" warning, so we don't.
 
 
 function classRulesFor(field: string, attr: string): CellClassRules {
@@ -63,9 +63,13 @@ export function QcGrid({
         field: c.field,
         headerName: c.header,
         editable: c.editable,
-        sortable: false,
-        filter: true,
-        resizable: true,
+        // Editable column: light brand tint on the header (visual cue for the
+        // analyst's primary interaction column) + chevron in every cell so
+        // the dropdown affordance is visible without a double-click discovery.
+        headerClass: c.editable ? "ag-header-editable" : undefined,
+        cellClass: c.editable ? "cell-editable-select" : undefined,
+        // Editable column needs slightly more room for value + chevron.
+        maxWidth: c.editable ? 280 : undefined,
         cellEditor: c.editable ? "agSelectCellEditor" : undefined,
         cellEditorParams: c.editable
           ? ({ values: payload.attribute_options } as Partial<ICellEditorParams>)
@@ -98,6 +102,13 @@ export function QcGrid({
       <AgGridReact
         rowData={payload.rows as Record<string, unknown>[]}
         columnDefs={colDefs}
+        defaultColDef={{
+          minWidth: 90,
+          maxWidth: 220,
+          sortable: false,
+          filter: true,
+          resizable: true,
+        }}
         context={context}
         getRowId={(p) => String((p.data as Record<string, unknown>)._row_id ?? "")}
         animateRows={false}

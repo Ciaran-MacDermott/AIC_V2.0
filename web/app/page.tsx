@@ -8,10 +8,8 @@ import type { JobStatus } from "@/lib/types";
 import { Header } from "@/components/header";
 import { FileSlot } from "@/components/upload";
 import { ProgressPanel } from "@/components/progress-panel";
-import { LogTail } from "@/components/log-tail";
-import { RunsSidebar } from "@/components/runs-sidebar";
+import { FullLogTail } from "@/components/log-tail";
 import { RunErrorDialog } from "@/components/run-error-dialog";
-import { recordRun, updateRunState } from "@/lib/recent";
 
 const POLL_MS = 700;
 // Terminal states the polling loop can stop on.
@@ -41,6 +39,7 @@ function Phase1Page() {
   const [status, setStatus] = useState<JobStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
 
   const pollRef = useRef<number | null>(null);
 
@@ -55,7 +54,6 @@ function Phase1Page() {
         const s = await api.status(runId);
         if (cancelled) return;
         setStatus(s);
-        updateRunState(runId, s.state);
         if (s.state === "qc_ready") {
           router.push(`/qc?runId=${encodeURIComponent(runId)}`);
           return;
@@ -64,7 +62,18 @@ function Phase1Page() {
         pollRef.current = window.setTimeout(tick, POLL_MS);
       } catch (e) {
         if (cancelled) return;
-        setError(e instanceof Error ? e.message : String(e));
+        // 404 on the URL's runId means the run was finished and cleaned
+        // up (or evicted by idle TTL).  Don't render an error — silently
+        // reset to the upload form so re-opening a stale link from a
+        // bookmark / shared message lands clean.
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.startsWith("404")) {
+          setRunId(null);
+          setStatus(null);
+          router.replace("/");
+          return;
+        }
+        setError(msg);
       }
     }
 
@@ -86,13 +95,6 @@ function Phase1Page() {
             ? await api.startPhase1(xlsx, csv)
             : (() => { throw new Error("Pick a zip OR an xlsx + csv before running"); })();
       setRunId(run_id);
-      // Persist the new run so the sidebar (and a future tab) can find it.
-      const label = uploadMode === "zip"
-        ? zipFile?.name
-        : xlsx ? `${xlsx.name}` : undefined;
-      recordRun({
-        run_id, phase: "phase1", created_at: Date.now(), label,
-      });
       // Reflect the run in the URL so reloads / shares work.
       router.replace(`/?runId=${encodeURIComponent(run_id)}`);
     } catch (e) {
@@ -139,7 +141,6 @@ function Phase1Page() {
         subtitle="Upload a labelled Excel (META + FINAL) and a new-product CSV. The pipeline runs lookup → BM25 → XGBoost ensemble, then surfaces each attribute's lookup sheet for QC review."
       />
       <main className="mx-auto max-w-5xl px-6 pb-12">
-      <RunsSidebar currentRunId={runId} />
 
       {!runId && (
         <section className="surface-card p-7 mb-6 space-y-6 fade-in-up">
@@ -223,7 +224,43 @@ function Phase1Page() {
             <RunErrorDialog status={status} onRetry={onReset} />
           )}
           <ProgressPanel status={status} />
-          <LogTail lines={status.log_tail} />
+          {/* Logs collapsed by default — keeps the run UI focused on stage +
+              progress, while leaving the full output one click away.
+              Mirrors the QC page's pipelineStrip and Phase 2 advanced config
+              disclosure patterns. */}
+          {status.log_cursor > 0 && runId && (
+            <details
+              open={logsOpen}
+              onToggle={(e) => setLogsOpen((e.target as HTMLDetailsElement).open)}
+              className="group surface-card-quiet mt-3 px-4 py-2 text-xs text-zinc-600"
+            >
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 select-none">
+                <span className="flex items-center gap-2">
+                  <span className={`inline-block h-1.5 w-1.5 rounded-full ${
+                    isError ? "bg-err"
+                    : isStopped ? "bg-zinc-400"
+                    : isRunning ? "bg-brand-500"
+                    : "bg-emerald-500"
+                  }`} />
+                  <span>
+                    Pipeline output
+                    <span className="text-zinc-400"> · </span>
+                    <span className="tabular-nums">{status.log_cursor}</span> log lines
+                  </span>
+                </span>
+                <span className="text-zinc-400 group-open:hidden">Show ▾</span>
+                <span className="text-zinc-400 hidden group-open:inline">Hide ▴</span>
+              </summary>
+              {/* Mount-on-open: FullLogTail fetches the whole buffer via
+                  /api/runs/{id}/logs — analyst sees every line, not just
+                  the live 60-line tail in the status response. */}
+              <div className="mt-3">
+                {logsOpen && (
+                  <FullLogTail runId={runId} active={isRunning} />
+                )}
+              </div>
+            </details>
+          )}
           <div className="mt-4 flex items-center gap-2">
             {isRunning && (
               <button

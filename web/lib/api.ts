@@ -124,10 +124,28 @@ export const api = {
     return res.json();
   },
 
+  scanPhase2FromParent: (parentRunId: string) =>
+    getJSON<Phase2ScanResult>(
+      `/api/phase2/scan/from-parent/${encodeURIComponent(parentRunId)}`,
+    ),
+
   postQcUpload: async (id: string, xlsx: File): Promise<PostQcDone> => {
     const fd = new FormData();
     fd.append("xlsx", xlsx);
     const res = await fetch(`${API_BASE}/api/runs/${id}/post_qc`, { method: "POST", body: fd });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    return res.json();
+  },
+
+  // Standalone post-QC: creates a fresh run for the edited xlsx, no
+  // dependency on a prior Phase 2 run still being in the registry.
+  // Returns RunCreated; the client polls /api/runs/{id} for state and
+  // downloads /api/runs/{id}/artifacts/post_qc.zip when post_qc_done.
+  postQcStandalone: async (xlsx: File, isCustomCollapse: boolean): Promise<RunCreated> => {
+    const fd = new FormData();
+    fd.append("xlsx", xlsx);
+    fd.append("is_custom_collapse", String(isCustomCollapse));
+    const res = await fetch(`${API_BASE}/api/post_qc/standalone`, { method: "POST", body: fd });
     if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
     return res.json();
   },

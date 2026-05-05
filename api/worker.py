@@ -128,8 +128,14 @@ class _LogStream:
 @contextmanager
 def _run_slot(record: JobRecord):
     """Block on RUN_SLOTS, then yield with the slot held."""
-    set_state(record, stage_label="Waiting for a free run slot…")
-    RUN_SLOTS.acquire()
+    # Only set the "waiting" label if we actually have to wait.  Setting
+    # it unconditionally before acquire() caused a confusing UI flash
+    # for solo users — they'd see "Waiting for a free run slot…" for
+    # one poll tick before the worker started running, even though
+    # nothing was queued.
+    if not RUN_SLOTS.acquire(blocking=False):
+        set_state(record, stage_label="Waiting for a free run slot…")
+        RUN_SLOTS.acquire()
     try:
         yield
     finally:
@@ -152,13 +158,21 @@ def _spawn_pipeline(record: JobRecord, command: str,
     and exits 99).  Survives monkeypatch via the AIC_INPROCESS escape
     hatch — tests use the in-process branch where the legacy code lives.
     """
+    # text=True defaults to the locale encoding (cp1252 on Windows), which
+    # crashes on checkmarks/box-drawing chars the pipeline emits.  Pin to
+    # utf-8 in both directions: pipe decoding here, plus PYTHONIOENCODING
+    # so the child's own stdout writes encode in utf-8 as well.
+    child_env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     proc = subprocess.Popen(
         [sys.executable, "-u", "-m", "api.run_pipeline", command, str(record.tmpdir)],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         bufsize=1,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         cwd=_REPO_ROOT,
+        env=child_env,
     )
     stream = _LogStream(record, progress_table, label_table)
 
@@ -324,6 +338,52 @@ def start_phase1(record: JobRecord, excel_path: str, csv_path: str) -> threading
 # Phase 2 worker
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Files Phase 2 expects to find at the project root (alongside any
+# wrapper-folder layout that scan_directory walks one level into).
+_PHASE2_REQUIRED = (
+    "File_For_Mapping_QC.xlsx",
+    "ModelInfo.txt",
+    "Attributes.txt",
+    "AttributeValues.txt",
+)
+
+
+def _log_phase2_inputs(record: JobRecord, directory_path: str) -> None:
+    """
+    List what's on disk under ``directory_path`` so the run log shows the
+    files Phase 2 will see before the pipeline starts.  Mirrors the
+    Streamlit page's start-of-run validation: faster diagnosis when a
+    'ModelInfo.txt not found' error fires (was it the zip layout, the
+    Phase 1 → Phase 2 handoff, or really a missing file?).
+    """
+    p = Path(directory_path)
+    if not p.is_dir():
+        append_log(record, f"⚠ Project directory not found: {p}")
+        return
+
+    items = sorted(p.iterdir(), key=lambda x: x.name)
+    files   = [i.name for i in items if i.is_file()]
+    subdirs = [i.name for i in items if i.is_dir()]
+
+    append_log(record, f"Project directory: {p}")
+    append_log(record, f"  Files: {', '.join(files) if files else '(none)'}")
+    if subdirs:
+        # Show one level of nesting so a wrapper folder is visible at a glance.
+        for sub in subdirs:
+            sub_path = p / sub
+            try:
+                inner = sorted(x.name for x in sub_path.iterdir())
+            except OSError:
+                inner = []
+            append_log(record, f"  {sub}/: {', '.join(inner) if inner else '(empty)'}")
+
+    missing = [f for f in _PHASE2_REQUIRED if not (p / f).is_file()]
+    if missing:
+        append_log(record, f"⚠ Required files missing at root: {', '.join(missing)}")
+    else:
+        append_log(record, "✓ All four required files present at root")
+
+
 def run_phase2_worker(record: JobRecord, directory_path: str,
                       inputs: Phase2Inputs) -> None:
     """
@@ -346,6 +406,7 @@ def run_phase2_worker(record: JobRecord, directory_path: str,
     try:
         with _run_slot(record):
             set_state(record, stage_label="Starting…")
+            _log_phase2_inputs(record, directory_path)
             try:
                 with _capture_phase_errors(record):
                     interim = _run_phase_a(record, directory_path, inputs)

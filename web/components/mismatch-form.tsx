@@ -143,6 +143,12 @@ export function MismatchForm({
   const hasDescription = group.rows.some((r) => r.DESCRIPTION);
   const hasRmrr        = group.rows.some((r) => r.RMRR);
 
+  // Streamlit page rendered DESCRIPTION as just the first 3 words —
+  // enough for the analyst to recognise the SKU without bloating column
+  // width.  The full text is still on the QC sheet if they need it.
+  const firstThreeWords = (s: string): string =>
+    s.trim().split(/\s+/).slice(0, 3).join(" ");
+
   return (
     <section className="space-y-4">
       <div className="rounded-lg border border-amber-200 bg-amber-50 text-amber-900 p-4 text-sm">
@@ -172,17 +178,23 @@ export function MismatchForm({
         </span>
       </div>
 
-      <div className="surface-card overflow-hidden">
+      {/* Horizontal scroll on overflow — long brand/tool_brand values were
+          being truncated when the parent column was narrower than the row.
+          whitespace-nowrap on each td keeps column widths sized to content
+          so the scroll engages instead of column-squashing. */}
+      <div className="surface-card overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-zinc-50 text-zinc-600 text-xs uppercase tracking-wide">
             <tr>
-              <th className="px-3 py-2 text-left">{group.brand_col}</th>
-              <th className="px-3 py-2 text-left">{group.tool_brand_col}</th>
-              {group.parent_col && <th className="px-3 py-2 text-left">{group.parent_col}</th>}
-              {hasDescription && <th className="px-3 py-2 text-left">DESCRIPTION</th>}
-              {hasRmrr        && <th className="px-3 py-2 text-left">RMRR</th>}
-              <th className="px-3 py-2 text-left">BRAND ✏</th>
-              <th className="px-3 py-2 text-left">TOOL_BRAND ✏</th>
+              <th className="px-3 py-2 text-left whitespace-nowrap">{group.brand_col}</th>
+              <th className="px-3 py-2 text-left whitespace-nowrap">{group.tool_brand_col}</th>
+              {group.parent_col && (
+                <th className="px-3 py-2 text-left whitespace-nowrap">{group.parent_col}</th>
+              )}
+              {hasDescription && <th className="px-3 py-2 text-left whitespace-nowrap">DESCRIPTION</th>}
+              {hasRmrr        && <th className="px-3 py-2 text-left whitespace-nowrap">RMRR</th>}
+              <th className="px-3 py-2 text-left whitespace-nowrap">BRAND ✏</th>
+              <th className="px-3 py-2 text-left whitespace-nowrap">TOOL_BRAND ✏</th>
             </tr>
           </thead>
           <tbody>
@@ -201,16 +213,16 @@ export function MismatchForm({
 
               return (
                 <tr key={ri} className={rowClass}>
-                  <td className="px-3 py-2 font-mono text-xs">{row.BRAND}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{row.TOOL_BRAND}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">{row.BRAND}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">{row.TOOL_BRAND}</td>
                   {group.parent_col && (
-                    <td className="px-3 py-2 font-mono text-xs">{row.PARENT ?? ""}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{row.PARENT ?? ""}</td>
                   )}
                   {hasDescription && (
-                    <td className="px-3 py-2 text-xs">{row.DESCRIPTION ?? ""}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{firstThreeWords(row.DESCRIPTION ?? "")}</td>
                   )}
                   {hasRmrr && (
-                    <td className="px-3 py-2 text-xs">
+                    <td className="px-3 py-2 whitespace-nowrap">
                       {row.RMRR === "RES" ? (
                         <span className="rounded bg-amber-100 text-amber-800 px-1.5 py-0.5">
                           RES
@@ -222,7 +234,7 @@ export function MismatchForm({
                     <select
                       value={d.brand_new}
                       onChange={(e) => setDecision(ri, { brand_new: e.target.value })}
-                      className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
+                      className="border border-zinc-300 rounded px-2 py-1 text-sm w-full min-w-[12rem]"
                     >
                       {brandOptions.map((v) => (
                         <option key={v} value={v}>{v || "—"}</option>
@@ -233,7 +245,7 @@ export function MismatchForm({
                     <select
                       value={d.tool_brand_new}
                       onChange={(e) => setDecision(ri, { tool_brand_new: e.target.value })}
-                      className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
+                      className="border border-zinc-300 rounded px-2 py-1 text-sm w-full min-w-[12rem]"
                     >
                       {toolBrandOptions.map((v) => (
                         <option key={v} value={v}>{v || "—"}</option>

@@ -58,7 +58,7 @@ body::before {
 
 /* ── Component primitives (Tailwind @apply) ───────────────────────────── */
 @layer components {
-  /* Glass-style card surface — used by ProgressPanel, RunsSidebar, etc.
+  /* Glass-style card surface — used by ProgressPanel, surface containers, etc.
      The translucent background lets the aurora bleed through on hover. */
   .surface-card {
     @apply rounded-2xl bg-white/80 border;
@@ -165,4 +165,23 @@ body::before {
   background-color: #FFF2CC !important;
   color: #7F6000 !important;
   font-style: italic;
+}
+
+/* Editable column header — light brand tint to draw the analyst's eye to
+   the column they're actually editing. Override AG Grid's default dark
+   header background for this one column. */
+.ag-theme-quartz .ag-header-cell.ag-header-editable {
+  background-color: #E8DBF2 !important;
+}
+.ag-theme-quartz .ag-header-cell.ag-header-editable .ag-header-cell-text {
+  color: #2E0840 !important;
+}
+
+/* Editable cells get a pointer cursor so analysts know they're
+   clickable.  The dropdown arrow itself is intentionally not surfaced
+   in view mode — the native browser arrow appears on double-click
+   when the agSelectCellEditor opens.  UX convention to communicate:
+   "double-click to edit". */
+.ag-theme-quartz .cell-editable-select {
+  cursor: pointer;
 }

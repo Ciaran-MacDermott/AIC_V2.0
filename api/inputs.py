@@ -111,6 +111,12 @@ class Phase2Scan:
     manufacturer_values:       list[str]
     brand_values:              list[str]
     tool_brand_values:         list[str]
+    # Distinct values per column (bounded by the same 500-row read used
+    # for the rest of this scan).  Lets the brand-override rule editor
+    # populate its dropdowns from whichever columns the analyst picked
+    # in the column-name fields above, instead of being hard-coded to
+    # the BRAND / TOOL_BRAND / default-manufacturer columns.
+    column_values:             dict[str, list[str]]
 
 
 def scan_phase2_xlsx(xlsx_path: Path) -> Phase2Scan:
@@ -163,6 +169,8 @@ def scan_phase2_xlsx(xlsx_path: Path) -> Phase2Scan:
             )
         return []
 
+    column_values = {col: _uniq(col) for col in all_cols}
+
     return Phase2Scan(
         raw_upc_columns=raw_cols,
         raw_manufacturer_columns=raw_cols,   # same set; UI surfaces both
@@ -172,6 +180,7 @@ def scan_phase2_xlsx(xlsx_path: Path) -> Phase2Scan:
         manufacturer_values=_uniq(default_mfr),
         brand_values=_uniq("BRAND"),
         tool_brand_values=_uniq("TOOL_BRAND"),
+        column_values=column_values,
     )
 
 

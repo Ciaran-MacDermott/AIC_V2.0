@@ -60,6 +60,19 @@ export function Phase2AdvancedConfig({
   brandOverrideRows: BrandOverrideRow[];
   setBrandOverrideRows: (next: BrandOverrideRow[]) => void;
 }) {
+  // Source the rule-editor dropdowns from whichever column the analyst
+  // picked in the column-name fields above.  Fall back to the static
+  // *_values fields the scan returns for the defaults so the dropdowns
+  // still have content when scan finishes before the user changes the
+  // column pickers.
+  const colValues = scan?.column_values ?? {};
+  const mfrValues =
+    colValues[brandOverride.raw_manufacturer_col] ?? scan?.manufacturer_values ?? [];
+  const brandValues =
+    colValues[brandOverride.brand_col] ?? scan?.brand_values ?? [];
+  const toolBrandValues =
+    colValues[brandOverride.tool_brand_col] ?? scan?.tool_brand_values ?? [];
+
   return (
     <details
       open={expanded}
@@ -69,7 +82,7 @@ export function Phase2AdvancedConfig({
       className="rounded-xl border border-zinc-200 bg-white"
     >
       <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50 rounded-xl">
-        Advanced configuration
+        Project Scope Configuration
         <span className="ml-2 text-xs text-zinc-500">
           (private-label rules, brand overrides — defaults usually fine)
         </span>
@@ -80,9 +93,8 @@ export function Phase2AdvancedConfig({
         <section className="space-y-2">
           <div className="text-sm font-medium text-zinc-700">Private label rules</div>
           <p className="text-xs text-zinc-500">
-            For each retailer, choose whether private-label SKUs get rewritten
-            and what label they receive. Streamlit defaults: walmart restricted,
-            cvs exclude, heb off.
+            For each retailer, choose whether private label restricted is enabled
+            and what the label should be.
           </p>
           <table className="w-full text-sm">
             <thead className="bg-zinc-50 text-zinc-600 text-xs uppercase tracking-wide">
@@ -95,7 +107,7 @@ export function Phase2AdvancedConfig({
             <tbody>
               {Object.entries(privateLabelRules).map(([retailer, rule]) => (
                 <tr key={retailer} className="border-t border-zinc-100">
-                  <td className="px-3 py-2 font-mono text-xs">{retailer}</td>
+                  <td className="px-3 py-2 text-xs">{retailer}</td>
                   <td className="px-3 py-2">
                     <input
                       type="checkbox"
@@ -129,12 +141,12 @@ export function Phase2AdvancedConfig({
 
           <label className="block text-xs text-zinc-600">
             <span className="block mb-1">PL base name override</span>
-            <input
-              type="text"
+            <ColumnSelect
               value={plBaseName}
-              onChange={(e) => setPlBaseName(e.target.value)}
-              placeholder="(blank = use TOOL_BRAND)"
-              className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
+              onChange={setPlBaseName}
+              options={scan?.all_columns ?? []}
+              emptyLabel="(blank = use TOOL_BRAND)"
+              fallbackPlaceholder="(blank = use TOOL_BRAND)"
             />
           </label>
         </section>
@@ -147,15 +159,19 @@ export function Phase2AdvancedConfig({
             list is empty), so always-on is safe. */}
         <section className="space-y-3">
           <div>
-            <div className="text-sm font-medium text-zinc-800">Brand override rules</div>
+            <div className="text-sm font-medium text-zinc-800">Client Brand override rules</div>
             <p className="text-xs text-zinc-500 mt-0.5">
-              Force-map specific (manufacturer, brand) pairs to a different
-              TOOL_BRAND. Leave the table empty if you don&apos;t need any
-              overrides on this run.
+              Force-map specific (manufacturer, brand) client pairs to a
+              different TOOL_BRAND value. Check the scope form for confirmation.
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {/* Top column-pickers + bottom rule editor share the same 4-track
+              grid template (3 equal data columns + a fixed-width slot for
+              the row-delete button).  This makes the rule dropdowns line
+              up under the column-name selectors above pixel-for-pixel,
+              instead of drifting because of table auto-sizing. */}
+          <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1fr_2.5rem] gap-3">
             <label className="block text-xs text-zinc-600">
               <span className="block mb-1">RAW manufacturer column</span>
               {scan && scan.raw_manufacturer_columns.length > 0 ? (
@@ -183,110 +199,100 @@ export function Phase2AdvancedConfig({
             </label>
             <label className="block text-xs text-zinc-600">
               <span className="block mb-1">BRAND column</span>
-              <input
-                type="text"
+              <ColumnSelect
                 value={brandOverride.brand_col}
-                onChange={(e) =>
-                  setBrandOverride({ ...brandOverride, brand_col: e.target.value })
-                }
-                className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
+                onChange={(v) => setBrandOverride({ ...brandOverride, brand_col: v })}
+                options={scan?.all_columns ?? []}
+                fallbackPlaceholder="BRAND"
               />
             </label>
             <label className="block text-xs text-zinc-600">
               <span className="block mb-1">TOOL_BRAND column</span>
-              <input
-                type="text"
+              <ColumnSelect
                 value={brandOverride.tool_brand_col}
-                onChange={(e) =>
-                  setBrandOverride({ ...brandOverride, tool_brand_col: e.target.value })
-                }
-                className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
+                onChange={(v) => setBrandOverride({ ...brandOverride, tool_brand_col: v })}
+                options={scan?.all_columns ?? []}
+                fallbackPlaceholder="TOOL_BRAND"
               />
             </label>
+            {/* Empty cell aligning with the row-delete column below. */}
+            <div className="hidden md:block" />
           </div>
 
           {/* Row-shaped rules editor — mirrors Streamlit's data_editor on
               lines 1004-1033.  Each row maps to a single-element
-              BrandOverrideRule on submission. */}
+              BrandOverrideRule on submission.  Same grid template as the
+              column-pickers above so dropdowns align column-to-column. */}
           <div className="space-y-2">
-            <table className="w-full text-sm">
-              <thead className="bg-zinc-50 text-zinc-600 text-xs uppercase tracking-wide">
-                <tr>
-                  <th className="px-3 py-2 text-left">Manufacturer</th>
-                  <th className="px-3 py-2 text-left">From BRAND</th>
-                  <th className="px-3 py-2 text-left">To TOOL_BRAND</th>
-                  <th className="w-12" />
-                </tr>
-              </thead>
-              <tbody>
-                {brandOverrideRows.map((row, i) => (
-                  <tr key={i} className="border-t border-zinc-100">
-                    <td className="px-3 py-1.5">
-                      <RuleField
-                        value={row.manufacturer}
-                        options={scan?.manufacturer_values}
-                        placeholder="manufacturer"
-                        onChange={(v) =>
-                          setBrandOverrideRows(
-                            brandOverrideRows.map((r, j) =>
-                              j === i ? { ...r, manufacturer: v } : r,
-                            ),
-                          )
-                        }
-                      />
-                    </td>
-                    <td className="px-3 py-1.5">
-                      <RuleField
-                        value={row.from_brand}
-                        options={scan?.brand_values}
-                        placeholder="old BRAND"
-                        onChange={(v) =>
-                          setBrandOverrideRows(
-                            brandOverrideRows.map((r, j) =>
-                              j === i ? { ...r, from_brand: v } : r,
-                            ),
-                          )
-                        }
-                      />
-                    </td>
-                    <td className="px-3 py-1.5">
-                      <RuleField
-                        value={row.to_tool_brand}
-                        options={scan?.tool_brand_values}
-                        placeholder="new TOOL_BRAND"
-                        onChange={(v) =>
-                          setBrandOverrideRows(
-                            brandOverrideRows.map((r, j) =>
-                              j === i ? { ...r, to_tool_brand: v } : r,
-                            ),
-                          )
-                        }
-                      />
-                    </td>
-                    <td className="px-3 py-1.5 text-right">
-                      <button
-                        type="button"
-                        aria-label="Remove rule"
-                        onClick={() => {
-                          // Keep at least one empty row visible so the editor
-                          // is always primed.  Removing the last row resets
-                          // it instead of collapsing the table.
-                          const rest = brandOverrideRows.filter((_, j) => j !== i);
-                          setBrandOverrideRows(
-                            rest.length > 0
-                              ? rest
-                              : [{ manufacturer: "", from_brand: "", to_tool_brand: "" }],
-                          );
-                        }}
-                        className="text-xs text-zinc-400 hover:text-err"
-                      >
-                        ×
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1fr_2.5rem] gap-3 bg-zinc-50 px-3 py-2 rounded text-xs uppercase tracking-wide text-zinc-600">
+              <div>Manufacturer</div>
+              <div>From BRAND</div>
+              <div>To TOOL_BRAND</div>
+              <div className="hidden md:block" />
+            </div>
+            <div className="space-y-1.5">
+              {brandOverrideRows.map((row, i) => (
+                <div
+                  key={i}
+                  className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1fr_2.5rem] gap-3 items-center"
+                >
+                  <RuleField
+                    value={row.manufacturer}
+                    options={mfrValues}
+                    placeholder="manufacturer value"
+                    onChange={(v) =>
+                      setBrandOverrideRows(
+                        brandOverrideRows.map((r, j) =>
+                          j === i ? { ...r, manufacturer: v } : r,
+                        ),
+                      )
+                    }
+                  />
+                  <RuleField
+                    value={row.from_brand}
+                    options={brandValues}
+                    placeholder="old BRAND value"
+                    onChange={(v) =>
+                      setBrandOverrideRows(
+                        brandOverrideRows.map((r, j) =>
+                          j === i ? { ...r, from_brand: v } : r,
+                        ),
+                      )
+                    }
+                  />
+                  <RuleField
+                    value={row.to_tool_brand}
+                    options={toolBrandValues}
+                    placeholder="new TOOL_BRAND value"
+                    onChange={(v) =>
+                      setBrandOverrideRows(
+                        brandOverrideRows.map((r, j) =>
+                          j === i ? { ...r, to_tool_brand: v } : r,
+                        ),
+                      )
+                    }
+                  />
+                  <button
+                    type="button"
+                    aria-label="Remove rule"
+                    onClick={() => {
+                      // Keep at least one empty row visible so the editor
+                      // is always primed.  Removing the last row resets
+                      // it instead of collapsing the table.
+                      const rest = brandOverrideRows.filter((_, j) => j !== i);
+                      setBrandOverrideRows(
+                        rest.length > 0
+                          ? rest
+                          : [{ manufacturer: "", from_brand: "", to_tool_brand: "" }],
+                      );
+                    }}
+                    className="justify-self-end text-base leading-none text-zinc-400 hover:text-err px-1"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
             <button
               type="button"
               onClick={() =>
@@ -299,13 +305,13 @@ export function Phase2AdvancedConfig({
             >
               + Add rule
             </button>
-            {scan?.tool_brand_values && scan.tool_brand_values.length > 0 && (
+            {toolBrandValues.length > 0 && (
               <details className="text-xs text-zinc-500">
                 <summary className="cursor-pointer">
-                  Reference: existing TOOL_BRAND values ({scan.tool_brand_values.length})
+                  Reference: existing {brandOverride.tool_brand_col || "TOOL_BRAND"} values ({toolBrandValues.length})
                 </summary>
                 <div className="mt-1 max-h-32 overflow-y-auto font-mono">
-                  {scan.tool_brand_values.join(", ")}
+                  {toolBrandValues.join(", ")}
                 </div>
               </details>
             )}
@@ -313,6 +319,54 @@ export function Phase2AdvancedConfig({
         </section>
       </div>
     </details>
+  );
+}
+
+
+/**
+ * Column-name picker.  Renders as a <select> populated from the scan's
+ * column list when one is available, falling back to a free-text input
+ * before the upload has been scanned.  Preserves any current value not
+ * in the option list as a "(custom)" entry so configs from older runs
+ * don't lose their column on first render.
+ *
+ * Used for the BRAND / TOOL_BRAND / PL base name fields.  Backs the
+ * "reduce manual error" goal of the Phase 2 advanced config — analysts
+ * pick from real columns rather than typing a name that risks a typo.
+ */
+function ColumnSelect({
+  value, onChange, options,
+  emptyLabel = "(none)",
+  fallbackPlaceholder,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  options: string[];
+  emptyLabel?: string;
+  fallbackPlaceholder?: string;
+}) {
+  if (options.length === 0) {
+    return (
+      <input
+        type="text"
+        value={value}
+        placeholder={fallbackPlaceholder}
+        onChange={(e) => onChange(e.target.value)}
+        className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
+      />
+    );
+  }
+  const isCustom = value !== "" && !options.includes(value);
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
+    >
+      <option value="">{emptyLabel}</option>
+      {isCustom && <option value={value}>{value} (custom)</option>}
+      {options.map((c) => <option key={c} value={c}>{c}</option>)}
+    </select>
   );
 }
 

@@ -24,12 +24,12 @@ function Wordmark() {
       <img
         src="/Circana_logo.png"
         alt="Circana"
-        className="h-8 w-auto select-none"
+        className="h-9 w-auto select-none"
         draggable={false}
       />
-      <span className="hidden sm:flex items-baseline gap-1.5 text-[17px] font-semibold tracking-tight">
+      <span className="hidden sm:flex items-baseline gap-1.5 text-[19px] font-semibold tracking-tight">
         <span className="text-zinc-300">/</span>
-        <span className="text-brand-700">AIC</span>
+        <span className="text-brand-700">Assortment AIC</span>
       </span>
     </Link>
   );
@@ -37,7 +37,7 @@ function Wordmark() {
 
 function NavTabs({ pathname }: { pathname: string }) {
   return (
-    <nav className="flex items-center gap-1 text-sm">
+    <nav className="flex items-center gap-1 text-[15px]">
       {NAV.map((item) => {
         const active =
           item.href === "/"
@@ -75,7 +75,7 @@ export function Header({
   return (
     <>
       <div className="app-bar">
-        <div className="mx-auto max-w-5xl px-6 h-16 flex items-center justify-between">
+        <div className="mx-auto max-w-5xl px-6 h-[70px] flex items-center justify-between">
           <Wordmark />
           <NavTabs pathname={pathname} />
         </div>

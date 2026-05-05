@@ -349,11 +349,16 @@ def download_log(run_id: str) -> FileResponse:
     if record is None:
         raise HTTPException(404, "Run not found")
 
+    # Path.write_text defaults to the locale encoding (cp1252 on Windows),
+    # which can't encode pipeline glyphs like check / arrow / spinner chars.
+    # Pin to UTF-8 so the whole log makes it to disk — analysts need the
+    # complete Phase A + Phase B output to QC the cleaned workbook before
+    # re-uploading.
     log_path = record.tmpdir / "run_log.txt"
-    log_path.write_text("\n".join(record.log_lines))
+    log_path.write_text("\n".join(record.log_lines), encoding="utf-8")
     return FileResponse(
         path=str(log_path),
-        media_type="text/plain",
+        media_type="text/plain; charset=utf-8",
         filename="aic_run_log.txt",
     )
 
@@ -494,6 +499,29 @@ async def scan_phase2_xlsx_route(xlsx: UploadFile = File(...)) -> Phase2ScanResu
     return Phase2ScanResult(scan_id=_EMPTY_SCAN_ID, **meta.__dict__)
 
 
+@app.get("/api/phase2/scan/from-parent/{parent_run_id}", response_model=Phase2ScanResult)
+def scan_phase2_from_parent(parent_run_id: str) -> Phase2ScanResult:
+    """
+    Scan a parent Phase 1 run's QC workbook to populate Phase 2 dropdowns
+    when arriving via the handoff flow (?parentRunId=…) — without making
+    the user re-upload anything.
+    """
+    parent = jobs.registry.get(parent_run_id)
+    if parent is None:
+        raise HTTPException(404, "Parent run not found")
+    qc_path = parent.tmpdir / "File_For_Mapping_QC.xlsx"
+    if not qc_path.is_file():
+        raise HTTPException(
+            409,
+            "Parent run has no QC workbook yet — finish Phase 1 QC first.",
+        )
+    try:
+        meta = scan_phase2_xlsx(qc_path)
+    except InputError as exc:
+        raise HTTPException(400, str(exc))
+    return Phase2ScanResult(scan_id=_EMPTY_SCAN_ID, **meta.__dict__)
+
+
 # ── Phase 2 loose-files run ─────────────────────────────────────────────────
 # Mirrors the 'Individual files' radio mode in pages/2_Phase_3_Pipeline_and_QC.py
 # — analysts who finished Phase 1 in xlsx+csv mode and now need to run Phase 2
@@ -545,14 +573,71 @@ async def create_phase2_run_from_parent(
 
     tmpdir = Path(tempfile.mkdtemp(prefix="aic_p2_"))
     project_dir = tmpdir / "extracted"
+    project_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy *contents* of the parent's tmpdir, not the dir itself, so the
-    # worker sees the four input files at the project root the same way
-    # an unwrapped zip would land them.
-    shutil.copytree(parent.tmpdir, project_dir)
+    # Layout the worker needs at project_dir:
+    #   File_For_Mapping_QC.xlsx — Phase 1 output (lives at parent.tmpdir/)
+    #   ModelInfo.txt + Attributes.txt + AttributeValues.txt — the tool files
+    #     extracted from the original zip into parent.tmpdir/extracted/, possibly
+    #     with one or more wrapper folders inside.
+    #
+    # Previous version did `shutil.copytree(parent.tmpdir, project_dir)`, which
+    # copied the parent's own `extracted/` subdir as a nested `extracted/extracted/`.
+    # phase3_package.pipeline only scans one level deep, so the tool files ended
+    # up hidden and Phase 2 raised FileNotFoundError on ModelInfo.txt.
+    parent_extracted = parent.tmpdir / "extracted"
+    copied: list[str] = []
+    if parent_extracted.is_dir():
+        visible = [e for e in parent_extracted.iterdir() if not e.name.startswith(".")]
+        # Mirror extract_zip_with_unwrap: if the zip had a single wrapper folder,
+        # use that as the effective root rather than parent_extracted itself.
+        source_root = (
+            visible[0] if len(visible) == 1 and visible[0].is_dir() else parent_extracted
+        )
+        for item in source_root.iterdir():
+            target = project_dir / item.name
+            if item.is_file():
+                shutil.copy2(item, target)
+                copied.append(item.name)
+            elif item.is_dir():
+                shutil.copytree(item, target, dirs_exist_ok=True)
+                copied.append(f"{item.name}/")
+
+    # rglob fallback for required tool files: if the zip nested ModelInfo.txt
+    # etc. deeper than a single wrapper folder, the loop above leaves them under
+    # a sub-subdirectory.  Lift each one into project_dir/ so phase3_package's
+    # one-level-deep scan can find it.  Tracked in `copied` for the audit log.
+    required = ("ModelInfo.txt", "Attributes.txt", "AttributeValues.txt")
+    for filename in required:
+        if (project_dir / filename).is_file():
+            continue
+        for candidate in parent.tmpdir.rglob(filename):
+            shutil.copy2(candidate, project_dir / filename)
+            try:
+                rel = candidate.relative_to(parent.tmpdir)
+            except ValueError:
+                rel = candidate
+            copied.append(f"{filename} (rglob from {rel})")
+            break
+
+    # Phase 1's qc_finalize wrote File_For_Mapping_QC.xlsx to parent.tmpdir/
+    # (not into extracted/), so copy it explicitly onto the same level as the
+    # tool files.  Done last so it overwrites any stale copy in the zip.
+    parent_qc = parent.tmpdir / "File_For_Mapping_QC.xlsx"
+    if parent_qc.is_file():
+        shutil.copy2(parent_qc, project_dir / "File_For_Mapping_QC.xlsx")
+        copied.append("File_For_Mapping_QC.xlsx")
 
     record = jobs.registry.create(
         phase="phase2", tmpdir=tmpdir, parent_run_id=parent.run_id,
+    )
+    # Audit trail for the handoff: a "ModelInfo.txt not found" failure in
+    # the worker can then be diagnosed against the actual file layout
+    # instead of guessed at.
+    jobs.append_log(record, f"Phase 1 → Phase 2 handoff from run {parent.run_id}")
+    jobs.append_log(
+        record,
+        f"  Copied to project dir: {', '.join(copied) if copied else '(nothing)'}",
     )
     inputs = _phase2_inputs_from_config(cfg)
     worker.start_phase2(record, str(project_dir), inputs)
@@ -627,6 +712,39 @@ def download_phase2_output(run_id: str) -> FileResponse:
 
 
 # ── Post-QC re-upload (Phase 2/3 finalize → category-CSV zip) ───────────────
+
+@app.post("/api/post_qc/standalone", response_model=RunCreated)
+async def post_qc_standalone(
+    xlsx: UploadFile = File(...),
+    is_custom_collapse: str = Form("false"),
+) -> RunCreated:
+    """
+    Standalone post-QC re-upload — does not require an existing run.
+
+    The post-QC stage only needs the analyst-edited xlsx + a
+    custom-collapse flag (see phase3_package.run_post_qc); none of the
+    Phase 2 run's pickle/state is read.  A standalone entry point
+    sidesteps two failure modes the run-scoped variant has:
+
+      • the parent run was idle-evicted from the registry (60min TTL)
+      • the BFF was restarted between Phase 2 finishing and the
+        analyst getting back to upload (in-memory registry wipes)
+
+    Either of those would 404 the run-scoped endpoint.  Standalone
+    creates its own JobRecord, runs the worker, and returns the new
+    run_id so the client can poll state and download the zip.
+    """
+    _require_xlsx(xlsx)
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="aic_postqc_"))
+    edited_path = tmpdir / "output_edited.xlsx"
+    edited_path.write_bytes(await xlsx.read())
+
+    record = jobs.registry.create(phase="phase2", tmpdir=tmpdir)
+    custom_collapse = is_custom_collapse.strip().lower() in ("true", "1", "yes")
+    worker.start_post_qc(record, str(edited_path), is_custom_collapse=custom_collapse)
+    return RunCreated(run_id=record.run_id)
+
 
 @app.post("/api/runs/{run_id}/post_qc", response_model=PostQcDone)
 async def post_qc_re_upload(run_id: str, xlsx: UploadFile = File(...)) -> PostQcDone:

@@ -219,6 +219,10 @@ class Phase2ScanResult(BaseModel):
     manufacturer_values:       list[str]
     brand_values:              list[str]
     tool_brand_values:         list[str]
+    # Per-column distinct values so the brand-override rule editor can
+    # source its dropdowns from whichever column the analyst picked in
+    # the column-name fields, not just the defaults.
+    column_values:             dict[str, list[str]] = {}
 
 
 # ── Post-QC re-upload (Phase 3 finalize → category CSVs) ────────────────────

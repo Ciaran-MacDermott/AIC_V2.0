@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import type { JobStatus, QcSheetList, QcSheetPayload, QcSheetSummary } from "@/lib/types";
 import { Header } from "@/components/header";
@@ -21,8 +21,22 @@ export default function QcWizardPageWrapper() {
 }
 
 function QcWizardPage() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const runId = searchParams.get("runId") ?? "";
+
+  // Workflow-complete teardown: download click → wait briefly so the
+  // browser actually starts the file, then delete the run server-side
+  // (frees the tmpdir + slot immediately, no waiting for idle TTL) and
+  // navigate home to a fresh upload form.  The "Continue to Phase 2"
+  // button is the explicit path for analysts who want to keep going;
+  // a plain Download click is the explicit "I'm done" signal.
+  function finishAndReset(): void {
+    window.setTimeout(() => {
+      if (runId) api.remove(runId).catch(() => undefined);
+      router.replace("/");
+    }, 1500);
+  }
 
   const [sheetList, setSheetList] = useState<QcSheetSummary[] | null>(null);
   const [step, setStep] = useState(0);
@@ -162,6 +176,22 @@ function QcWizardPage() {
         subtitle="Review and correct each lookup sheet before downloading the final workbook."
       />
       <main className="mx-auto max-w-7xl px-6 pb-12">
+      {finalising && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 backdrop-blur-sm fade-in-up"
+          role="dialog"
+          aria-live="polite"
+          aria-busy="true"
+        >
+          <div className="surface-card flex max-w-sm items-center gap-3 px-6 py-5">
+            <div className="h-5 w-5 animate-spin rounded-full border-2 border-brand-200 border-t-brand-700" />
+            <div>
+              <div className="font-medium text-zinc-900">Saving and finalizing…</div>
+              <div className="text-xs text-zinc-500">Writing File_For_Mapping_QC.xlsx</div>
+            </div>
+          </div>
+        </div>
+      )}
       {error && (
         <div className="rounded-xl border border-red-200 bg-red-50/80 backdrop-blur text-red-800 p-4 mb-4 text-sm">
           {error}
@@ -173,9 +203,18 @@ function QcWizardPage() {
         {pipelineStrip}
         <section className="rounded-2xl border border-emerald-200 bg-emerald-50/80 backdrop-blur text-emerald-900 p-5 fade-in-up">
           <div className="font-medium mb-2">QC workbook ready.</div>
+          <p className="text-xs text-emerald-900/70 mb-3">
+            If you&apos;re continuing to Phase 2 / 3, click that button first — a plain Download
+            click means you&apos;re done and will reset this page.
+          </p>
           <div className="flex flex-wrap items-center gap-3">
+            {/* Plain download = "I'm done" — auto-reset after the browser
+                starts the file.  Phase 1 → Phase 2 users should click the
+                Continue button first; that navigates away before the timer
+                fires, so the run isn't deleted out from under them. */}
             <a
               href={api.downloadUrl(downloadUrl)}
+              onClick={finishAndReset}
               className="btn-primary inline-flex items-center"
             >
               Download File_For_Mapping_QC.xlsx
@@ -190,24 +229,17 @@ function QcWizardPage() {
             >
               Continue to Phase 2 / 3 →
             </Link>
+            {/* Bundle is the audit-trail download — no need for a
+                standalone log link on Phase 1 since the bundle already
+                contains it.  The label spells out the contents so
+                analysts know what's in the zip without unpacking it. */}
             <a
               href={api.downloadUrl(`/api/runs/${runId}/artifacts/bundle.zip`)}
               className="text-sm text-brand-700 hover:text-brand-900 underline"
+              title="QC workbook + run log + analyst edits + metadata"
             >
-              Download bundle
+              Download archive (.zip — workbook, log, edits)
             </a>
-            <a
-              href={api.downloadUrl(`/api/runs/${runId}/artifacts/log.txt`)}
-              className="text-sm text-brand-700 hover:text-brand-900 underline"
-            >
-              Download log
-            </a>
-            <Link
-              href="/"
-              className="text-sm text-brand-700 hover:text-brand-900 underline"
-            >
-              Start a new run
-            </Link>
           </div>
         </section>
         </>

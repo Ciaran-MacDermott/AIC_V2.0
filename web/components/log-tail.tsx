@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api } from "@/lib/api";
 
 const ERROR_RE = /(error|exception|traceback|runtimeerror)/i;
 const WARN_RE  = /(^|\s)(warn|warning|missing|⚠)/i;
@@ -15,6 +16,63 @@ const COLOUR_RULES: { test: RegExp; cls: string }[] = [
 function colourClass(line: string): string {
   for (const r of COLOUR_RULES) if (r.test.test(line)) return r.cls;
   return "text-zinc-700";
+}
+
+/**
+ * Live log viewer that fetches the *full* buffer via /api/runs/{id}/logs.
+ *
+ * Why a separate component from LogTail: status responses cap log_tail at
+ * the last LOG_TAIL_SIZE (~60) lines so polling stays cheap.  When the
+ * analyst opens the "Pipeline output" disclosure they expect to see the
+ * whole run — the truncated tail looked like Phase A logs were missing.
+ *
+ * Mount-on-open keeps the polling cost off-screen: the parent renders
+ * this only while the <details> is open, so closing it stops the fetches.
+ */
+export function FullLogTail({
+  runId,
+  active,
+  pollMs = 2000,
+}: {
+  runId: string;
+  // Whether the run is still progressing — when false, fetch once and stop.
+  active: boolean;
+  pollMs?: number;
+}) {
+  const [lines, setLines] = useState<string[]>([]);
+  const cursorRef = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+
+    async function fetchSince() {
+      try {
+        const chunk = await api.logsSince(runId, cursorRef.current);
+        if (cancelled) return;
+        if (chunk.lines.length > 0) {
+          setLines((prev) => [...prev, ...chunk.lines]);
+        }
+        cursorRef.current = chunk.cursor;
+      } catch {
+        // Transient — try again next tick.
+      }
+      if (!cancelled && active) {
+        timer = window.setTimeout(fetchSince, pollMs);
+      }
+    }
+
+    cursorRef.current = 0;
+    setLines([]);
+    fetchSince();
+
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [runId, active, pollMs]);
+
+  return <LogTail lines={lines} />;
 }
 
 export function LogTail({ lines }: { lines: string[] }) {

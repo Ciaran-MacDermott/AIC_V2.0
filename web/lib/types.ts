@@ -168,9 +168,13 @@ export type Phase2ScanResult = {
   all_columns: string[];
   default_upc_col: string;
   default_manufacturer_col: string;
+  // Default-column values, kept for backward compat — the brand-override
+  // rule editor now sources from `column_values` keyed on the active
+  // column name so it tracks the user's column-name picks.
   manufacturer_values: string[];
   brand_values: string[];
   tool_brand_values: string[];
+  column_values?: Record<string, string[]>;
 };
 
 export type PostQcDone = {
