@@ -145,6 +145,13 @@ body::before {
   font-weight: 600;
   letter-spacing: 0.01em;
 }
+/* Body cells matched to the brand-mismatch dialog's 11px body font so
+   the two grids feel like the same family of UI.  Header stays at the
+   theme default (14px) — its purple band already signals header-ness,
+   and a slightly larger header makes column names easier to scan. */
+.ag-theme-quartz .ag-cell {
+  font-size: 11px;
+}
 
 /* Per-row flag styling from the Streamlit AgGrid JsCode functions. */
 .ag-theme-quartz .row-edited {
