@@ -757,7 +757,12 @@ async def post_qc_standalone(
     edited_path = tmpdir / "output_edited.xlsx"
     edited_path.write_bytes(await xlsx.read())
 
-    record = jobs.registry.create(phase="phase2", tmpdir=tmpdir)
+    # phase="post_qc" (not "phase2") so the dashboard / ETA bucketing can
+    # tell standalone re-uploads apart from a full Phase 2 run.  No
+    # logic branches on phase today — _RECENT_DURATIONS only tracks
+    # phase1 + phase2, so post_qc runs are silently excluded from ETA
+    # projection (correct: they're seconds, not minutes).
+    record = jobs.registry.create(phase="post_qc", tmpdir=tmpdir)
     custom_collapse = is_custom_collapse.strip().lower() in ("true", "1", "yes")
     worker.start_post_qc(record, str(edited_path), is_custom_collapse=custom_collapse)
     return RunCreated(run_id=record.run_id)

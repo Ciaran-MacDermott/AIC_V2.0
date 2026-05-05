@@ -142,6 +142,45 @@ def test_post_qc_runs_re_collapse_and_returns_zip(
     assert any(n.endswith("logs.txt") for n in names)
 
 
+def test_post_qc_standalone_creates_post_qc_phase_record(
+    client: TestClient, tmp_path: Path, monkeypatch
+) -> None:
+    """
+    /api/post_qc/standalone creates its own JobRecord with phase='post_qc'
+    (not 'phase2') so the dashboard / future ETA bucketing can tell
+    standalone re-uploads apart from a full Phase 2 run.  Survives
+    parent-run eviction by design — no parent_run_id reference.
+    """
+    def fake_post_qc(excel_path, is_custom_collapse, meta_df=None):
+        return pd.DataFrame(), {
+            "AMMO": pd.DataFrame([{"BRAND": "ACME"}]),
+        }
+
+    from api import worker as worker_mod
+    monkeypatch.setattr(worker_mod, "run_post_qc", fake_post_qc)
+
+    edited = write_post_qc_xlsx(tmp_path)
+    with edited.open("rb") as fh:
+        r = client.post(
+            "/api/post_qc/standalone",
+            files={"xlsx": ("output_edited.xlsx", fh,
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+            data={"is_custom_collapse": "false"},
+        )
+    assert r.status_code == 200, r.text
+    run_id = r.json()["run_id"]
+
+    record = jobs.registry.get(run_id)
+    assert record is not None
+    assert record.phase == "post_qc"
+    assert record.parent_run_id is None
+
+    _wait_until(
+        lambda: jobs.registry.get(run_id).state == "post_qc_done",
+        msg="standalone post-qc worker did not reach post_qc_done",
+    )
+
+
 def test_post_qc_propagates_pipeline_errors_into_state(
     client: TestClient, tmp_path: Path, monkeypatch
 ) -> None:
