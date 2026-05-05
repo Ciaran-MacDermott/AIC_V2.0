@@ -607,18 +607,29 @@ async def create_phase2_run_from_parent(
     # etc. deeper than a single wrapper folder, the loop above leaves them under
     # a sub-subdirectory.  Lift each one into project_dir/ so phase3_package's
     # one-level-deep scan can find it.  Tracked in `copied` for the audit log.
+    #
+    # Case-insensitive match: Linux is case-sensitive at the filesystem layer,
+    # so a zip containing `modelinfo.txt` would slip past `rglob("ModelInfo.txt")`.
+    # We always copy out under the canonical casing the worker expects.
     required = ("ModelInfo.txt", "Attributes.txt", "AttributeValues.txt")
-    for filename in required:
-        if (project_dir / filename).is_file():
-            continue
-        for candidate in parent.tmpdir.rglob(filename):
-            shutil.copy2(candidate, project_dir / filename)
+    required_lower = {f.lower(): f for f in required}
+    needed = {f for f in required if not (project_dir / f).is_file()}
+    if needed:
+        for candidate in parent.tmpdir.rglob("*"):
+            if not candidate.is_file():
+                continue
+            canonical = required_lower.get(candidate.name.lower())
+            if canonical is None or canonical not in needed:
+                continue
+            shutil.copy2(candidate, project_dir / canonical)
             try:
                 rel = candidate.relative_to(parent.tmpdir)
             except ValueError:
                 rel = candidate
-            copied.append(f"{filename} (rglob from {rel})")
-            break
+            copied.append(f"{canonical} (rglob from {rel})")
+            needed.discard(canonical)
+            if not needed:
+                break
 
     # Phase 1's qc_finalize wrote File_For_Mapping_QC.xlsx to parent.tmpdir/
     # (not into extracted/), so copy it explicitly onto the same level as the
