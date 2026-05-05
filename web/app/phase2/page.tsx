@@ -351,7 +351,7 @@ function Phase2Page() {
       <Header
         eyebrow="Phase 2 & 3"
         title="Pipeline & QC"
-        subtitle="Upload your project zip, review any BRAND / TOOL_BRAND mismatches, and download the cleaned workbook."
+        subtitle={"Run Phase 2 (attribute assembly) → Phase 3 (quality checks) on a zipped project.\nResolve any BRAND vs TOOL_BRAND mismatches when prompted, then QC the cleaned workbook and re-upload to export per-category CSVs."}
       />
       <main className="mx-auto max-w-5xl px-6 pb-12">
 
@@ -369,11 +369,9 @@ function Phase2Page() {
             </div>
           ) : (
             <p className="text-sm text-zinc-600">
-              Upload a zip containing <code>File_For_Mapping_QC.xlsx</code>,{" "}
-              <code>ModelInfo.txt</code>, <code>Attributes.txt</code> and{" "}
-              <code>AttributeValues.txt</code>. The pipeline runs Phase 2 (attribute
-              assembly) → Phase 3 (quality checks + transformations) and pauses for
-              review if any BRAND vs TOOL_BRAND mismatches surface.
+              Zip contents: <code>File_For_Mapping_QC.xlsx</code> +{" "}
+              <code>ModelInfo.txt</code>, <code>Attributes.txt</code>,{" "}
+              <code>AttributeValues.txt</code>.
             </p>
           )}
           {!parentRunId && (

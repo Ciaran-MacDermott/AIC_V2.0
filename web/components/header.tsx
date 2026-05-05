@@ -91,7 +91,7 @@ export function Header({
           {title}
         </h1>
         {subtitle && (
-          <p className="mt-3 text-[17px] text-zinc-600 max-w-2xl leading-relaxed">
+          <p className="mt-3 text-[17px] text-zinc-600 max-w-2xl leading-relaxed whitespace-pre-line">
             {subtitle}
           </p>
         )}

@@ -88,10 +88,10 @@ export function Phase2AdvancedConfig({
         </span>
       </summary>
 
-      <div className="px-4 pb-4 space-y-6 border-t border-zinc-100 pt-4">
+      <div className="px-4 pb-4 space-y-10 border-t border-zinc-100 pt-4">
         {/* ── Private Label Rules ─────────────────────────────────────── */}
         <section className="space-y-2">
-          <div className="text-sm font-medium text-zinc-700">Private label rules</div>
+          <div className="text-sm font-semibold text-brand-700">Private label rules</div>
           <p className="text-xs text-zinc-500">
             For each retailer, choose whether private label restricted is enabled
             and what the label should be.
@@ -157,9 +157,9 @@ export function Phase2AdvancedConfig({
             forces an extra click.  An empty rules table is a no-op for
             the pipeline (transforms.apply_brand_overrides skips when the
             list is empty), so always-on is safe. */}
-        <section className="space-y-3">
+        <section className="space-y-3 border-t border-zinc-100 pt-8">
           <div>
-            <div className="text-sm font-medium text-zinc-800">Client Brand override rules</div>
+            <div className="text-sm font-semibold text-brand-700">Client Brand override rules</div>
             <p className="text-xs text-zinc-500 mt-0.5">
               Force-map specific (manufacturer, brand) client pairs to a
               different TOOL_BRAND value. Check the scope form for confirmation.

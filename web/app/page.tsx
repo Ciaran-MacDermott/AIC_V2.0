@@ -138,7 +138,7 @@ function Phase1Page() {
       <Header
         eyebrow="Phase 1"
         title="Attribute Mapping"
-        subtitle="Upload a labelled Excel (META + FINAL) and a new-product CSV. The pipeline runs lookup → BM25 → XGBoost ensemble, then surfaces each attribute's lookup sheet for QC review."
+        subtitle={"Upload a labelled Excel (META + FINAL) and a new-product CSV.\nThe pipeline runs lookup → BM25 → XGBoost ensemble, then surfaces each attribute's lookup sheet for QC review."}
       />
       <main className="mx-auto max-w-5xl px-6 pb-12">
 
