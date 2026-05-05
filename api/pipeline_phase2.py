@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 import threading
+import uuid
 import zipfile
 from dataclasses import dataclass
 from datetime import date
@@ -311,8 +312,17 @@ def _derive_output_filename(df: pd.DataFrame) -> str:
     # Sanitise for filesystem (and for URL-encoding sanity in Content-
     # Disposition) — strip anything that isn't alphanumeric, hyphen, or
     # underscore.
-    cat = re.sub(r"[^A-Za-z0-9]+", "_", cat_raw).strip("_") or "OUTPUT"
-    return f"{cat}_{date.today().isoformat()}_qc_output.xlsx"
+    cat = re.sub(r"[^A-Za-z0-9]+", "_", cat_raw).strip("_")
+    today = date.today().isoformat()
+    if cat:
+        return f"{cat}_{today}_qc_output.xlsx"
+
+    # Fallback: no category column / all-blank values.  Append a short
+    # uuid suffix so two analysts hitting this branch on the same day
+    # don't get colliding "OUTPUT_2026-05-05_qc_output.xlsx" filenames
+    # in their downloads folder.
+    suffix = uuid.uuid4().hex[:4]
+    return f"OUTPUT_{today}_{suffix}_qc_output.xlsx"
 
 
 def _format_sheet(writer: "pd.ExcelWriter", df: pd.DataFrame,

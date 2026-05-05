@@ -110,7 +110,10 @@ Two layers:
   fast-test conftest stubs `ml_package` so no XGBoost / NLTK /
   openpyxl is required; covers the registry, QC sheet shaping, every
   Phase 1 + Phase 2 route, the mismatch pause/resume state machine,
-  the standalone post-QC flow, and the NLTK bootstrap.
+  the standalone post-QC flow, and the NLTK bootstrap. The conftest
+  sets `AIC_INPROCESS=1` so the worker calls the (stubbed) pipeline
+  in-process instead of spawning a subprocess — that's how the route
+  monkeypatches in these tests stay effective.
 - **Integration test** (`tests/integration/test_phase1_real.py`) —
   drives the real FastAPI BFF through the real `ml_package` pipeline
   with a synthetic xlsx + csv fixture: upload → background pipeline
