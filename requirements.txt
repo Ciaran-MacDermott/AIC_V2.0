@@ -1,22 +1,27 @@
-# FastAPI BFF
-fastapi>=0.115.0
-uvicorn[standard]>=0.32.0
-python-multipart>=0.0.18
-pydantic>=2.9.0
+# Pinned to exact versions for reproducible walled-garden builds.
+# Update via: .venv/bin/pip freeze | grep -iE '^(...)==' from a working venv,
+# then re-test the full suite before committing.
 
-# Pipeline (mirrors AIC_PHASE1 main branch — keep versions in sync)
-pandas>=1.4.0
-numpy>=1.23.0
-openpyxl>=3.0.9
-xlsxwriter>=3.0.2
-nltk>=3.8.0
-rank-bm25>=0.2.2
-rapidfuzz>=3.2.0
-xgboost>=1.4.0
-scikit-learn>=0.24.0
-regex>=2023.0.0
-python-dateutil>=2.8.1
+# FastAPI BFF
+fastapi==0.128.8
+uvicorn[standard]==0.39.0
+python-multipart==0.0.20
+pydantic==2.13.3
+
+# Pipeline (mirrors AIC_PHASE1 — keep versions in sync with upstream
+# when the vendored ml_package / phase3_package gets refreshed).
+pandas==2.3.3
+numpy==2.0.2
+openpyxl==3.1.5
+xlsxwriter==3.2.9
+nltk==3.9.2
+rank-bm25==0.2.2
+rapidfuzz==3.13.0
+xgboost==2.1.4
+scikit-learn==1.6.1
+regex==2026.1.15
+python-dateutil==2.9.0.post0
 
 # Tests
-pytest>=8.0.0
-httpx>=0.27.0
+pytest==8.4.2
+httpx==0.28.1
