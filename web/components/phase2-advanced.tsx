@@ -83,9 +83,6 @@ export function Phase2AdvancedConfig({
     >
       <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50 rounded-xl">
         Project Scope Configuration
-        <span className="ml-2 text-xs text-zinc-500">
-          (private-label rules, brand overrides — defaults usually fine)
-        </span>
       </summary>
 
       <div className="px-4 pb-4 space-y-10 border-t border-zinc-100 pt-4">
@@ -159,7 +156,7 @@ export function Phase2AdvancedConfig({
             list is empty), so always-on is safe. */}
         <section className="space-y-3 border-t border-zinc-100 pt-8">
           <div>
-            <div className="text-sm font-semibold text-brand-700">Client Brand override rules</div>
+            <div className="text-sm font-semibold text-brand-700">Client Brand rules</div>
             <p className="text-xs text-zinc-500 mt-0.5">
               Force-map specific (manufacturer, brand) client pairs to a
               different TOOL_BRAND value. Check the scope form for confirmation.
@@ -224,12 +221,11 @@ export function Phase2AdvancedConfig({
               BrandOverrideRule on submission.  Same grid template as the
               column-pickers above so dropdowns align column-to-column. */}
           <div className="space-y-2">
-            <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1fr_2.5rem] gap-3 bg-zinc-50 px-3 py-2 rounded text-xs uppercase tracking-wide text-zinc-600">
-              <div>Manufacturer</div>
-              <div>From BRAND</div>
-              <div>To TOOL_BRAND</div>
-              <div className="hidden md:block" />
-            </div>
+            {/* Empty grey separator — column labels were redundant with the
+                column-picker headers above and the placeholder text in
+                each rule field below. */}
+            <div className="bg-zinc-50 px-3 py-2 rounded" />
+
             <div className="space-y-1.5">
               {brandOverrideRows.map((row, i) => (
                 <div

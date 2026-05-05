@@ -204,7 +204,16 @@ def _spawn_pipeline(record: JobRecord, command: str,
         except Exception:
             pass
 
-    return proc.wait()
+    rc = proc.wait()
+    # On Windows proc.terminate() calls TerminateProcess (not SIGTERM), so
+    # the subprocess dies with exit code 1 before its signal handler can
+    # convert the stop into ExitCode.STOPPED.  If the user clicked Stop,
+    # honour that intent regardless of how the OS reaped the process —
+    # otherwise the analyst sees a "Server error / Pipeline failed"
+    # dialog for what they explicitly cancelled.
+    if rc != ExitCode.OK and record.stop_event.is_set():
+        return ExitCode.STOPPED
+    return rc
 
 
 def _read_pickle(path: Path) -> Any:
