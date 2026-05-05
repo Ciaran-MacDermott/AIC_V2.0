@@ -182,7 +182,7 @@ export function MismatchForm({
           being truncated when the parent column was narrower than the row.
           whitespace-nowrap on each td keeps column widths sized to content
           so the scroll engages instead of column-squashing. */}
-      <div className="surface-card overflow-x-auto">
+      <div className="surface-card overflow-x-auto overflow-y-auto max-h-[55vh]">
         <table className="w-full text-sm">
           <thead className="bg-zinc-50 text-zinc-600 text-xs uppercase tracking-wide">
             <tr>
@@ -192,9 +192,9 @@ export function MismatchForm({
                 <th className="px-3 py-1.5 text-left whitespace-nowrap">{group.parent_col}</th>
               )}
               {hasDescription && <th className="px-3 py-2 text-left whitespace-nowrap">DESCRIPTION</th>}
-              {hasRmrr        && <th className="px-3 py-2 text-left whitespace-nowrap">RMRR</th>}
-              <th className="px-3 py-1.5 text-left whitespace-nowrap">BRAND ✏</th>
-              <th className="px-3 py-1.5 text-left whitespace-nowrap">TOOL_BRAND ✏</th>
+              {hasRmrr        && <th className="px-2 py-2 text-left whitespace-nowrap w-12">RMRR</th>}
+              <th className="px-3 py-1.5 text-left whitespace-nowrap">BRAND</th>
+              <th className="px-3 py-1.5 text-left whitespace-nowrap">TOOL_BRAND</th>
             </tr>
           </thead>
           <tbody>
@@ -208,21 +208,21 @@ export function MismatchForm({
               const rowClass = [
                 "border-t border-zinc-100",
                 changed   ? "bg-[rgba(166,135,183,0.18)]" : "",
-                isExpected && !changed ? "text-zinc-400 bg-zinc-50" : "",
+                isExpected && !changed ? "text-zinc-400 bg-zinc-100" : "",
               ].join(" ");
 
               return (
                 <tr key={ri} className={rowClass}>
-                  <td className="px-3 py-1.5 whitespace-nowrap">{row.BRAND}</td>
-                  <td className="px-3 py-1.5 whitespace-nowrap">{row.TOOL_BRAND}</td>
+                  <td className="px-3 py-1.5 whitespace-nowrap text-[11px]">{row.BRAND}</td>
+                  <td className="px-3 py-1.5 whitespace-nowrap text-[11px]">{row.TOOL_BRAND}</td>
                   {group.parent_col && (
-                    <td className="px-3 py-1.5 whitespace-nowrap">{row.PARENT ?? ""}</td>
+                    <td className="px-3 py-1.5 whitespace-nowrap text-[11px]">{row.PARENT ?? ""}</td>
                   )}
                   {hasDescription && (
-                    <td className="px-3 py-1.5 whitespace-nowrap">{firstThreeWords(row.DESCRIPTION ?? "")}</td>
+                    <td className="px-3 py-1.5 whitespace-nowrap text-[11px]">{firstThreeWords(row.DESCRIPTION ?? "")}</td>
                   )}
                   {hasRmrr && (
-                    <td className="px-3 py-1.5 whitespace-nowrap">
+                    <td className="px-2 py-1.5 whitespace-nowrap text-[11px] w-12">
                       {row.RMRR === "RES" ? (
                         <span className="rounded bg-amber-100 text-amber-800 px-1.5 py-0.5">
                           RES
@@ -234,7 +234,7 @@ export function MismatchForm({
                     <select
                       value={d.brand_new}
                       onChange={(e) => setDecision(ri, { brand_new: e.target.value })}
-                      className="border border-zinc-300 rounded px-2 py-1 text-sm w-full min-w-[12rem]"
+                      className="border border-zinc-300 rounded px-2 py-1 text-[11px] w-full min-w-[12rem]"
                     >
                       {brandOptions.map((v) => (
                         <option key={v} value={v}>{v || "—"}</option>
@@ -245,7 +245,7 @@ export function MismatchForm({
                     <select
                       value={d.tool_brand_new}
                       onChange={(e) => setDecision(ri, { tool_brand_new: e.target.value })}
-                      className="border border-zinc-300 rounded px-2 py-1 text-sm w-full min-w-[12rem]"
+                      className="border border-zinc-300 rounded px-2 py-1 text-[11px] w-full min-w-[12rem]"
                     >
                       {toolBrandOptions.map((v) => (
                         <option key={v} value={v}>{v || "—"}</option>
