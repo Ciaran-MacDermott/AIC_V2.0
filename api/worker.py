@@ -61,9 +61,10 @@ from api.run_pipeline import ExitCode
 # for the analyst to submit mismatch corrections.  After this, we treat
 # the review as abandoned, mark the run as stopped, and let the parked
 # thread exit so the JobRecord becomes evictable by the idle-TTL reaper.
-# Two hours covers a reasonable lunch break + meeting; longer than that
-# and the analyst should re-upload.
-MISMATCH_REVIEW_TIMEOUT_S = 2 * 60 * 60
+# One hour covers a reasonable lunch break or a focused meeting; longer
+# than that and the run is almost certainly abandoned (analyst forgot
+# the tab, or stepped away for the day).  Re-uploading is cheap.
+MISMATCH_REVIEW_TIMEOUT_S = 60 * 60
 
 
 # ── Stage stream ─────────────────────────────────────────────────────────────
@@ -403,8 +404,9 @@ def run_phase2_worker(record: JobRecord, directory_path: str,
     1. No mismatch (happy path) — Phase A and Phase B both run while
        the slot is held; semaphore is held end-to-end.
     2. Mismatch surfaced — slot released, worker parks on resume_event
-       (with a 2h cap), reacquires a fresh slot for Phase B once the
-       analyst submits corrections.  Long reviews never block others.
+       (capped by MISMATCH_REVIEW_TIMEOUT_S), reacquires a fresh slot for
+       Phase B once the analyst submits corrections.  Long reviews never
+       block others.
     3. Error / stop at any point — slot released, state recorded by
        _capture_phase_errors, control returns to the caller.
     """
@@ -459,10 +461,11 @@ def run_phase2_worker(record: JobRecord, directory_path: str,
 
 def _wait_for_mismatch_resolve(record: JobRecord) -> float:
     """
-    Park on resume_event until the analyst submits corrections (or 2h
-    elapses, or stop_event fires).  Returns seconds spent waiting so the
-    caller can subtract it from the run duration recorded for ETA.
-    Side-effect: sets state=stopped on timeout or stop.
+    Park on resume_event until the analyst submits corrections (or
+    MISMATCH_REVIEW_TIMEOUT_S elapses, or stop_event fires).  Returns
+    seconds spent waiting so the caller can subtract it from the run
+    duration recorded for ETA.  Side-effect: sets state=stopped on
+    timeout or stop.
     """
     review_started = time.time()
     resumed = record.resume_event.wait(timeout=MISMATCH_REVIEW_TIMEOUT_S)

@@ -153,13 +153,13 @@ Two layers:
   `parent_run_id`). State machines, inputs, and artifacts differ
   enough that conflating them forced shared semantics that didn't
   fit.
-- **Mismatch pause is a `threading.Event` with a 2h cap.** When
+- **Mismatch pause is a `threading.Event` with a 1h cap.** When
   Phase A surfaces BRAND vs TOOL_BRAND mismatches the worker
   attaches a JSON-safe payload to the JobRecord and blocks on
   `resume_event.wait(timeout=…)`. The
   `/api/runs/{id}/mismatch/resolve` route writes corrections onto
   the record then sets the event so Phase B picks up exactly where
-  Phase A left off. Reviews abandoned past 2h flip the run to
+  Phase A left off. Reviews abandoned past 1h flip the run to
   `stopped` so the registry slot frees.
 - **Walled-garden encoding.** Subprocess stdio and any `Path.write_text`
   are pinned to UTF-8 — Windows defaults to `cp1252`, which the

@@ -1367,7 +1367,7 @@ code(
     "# slot released here — others can run while analyst reviews\n"
     "\n"
     "set_state(record, state='mismatch_pending')\n"
-    "record.resume_event.wait(timeout=2 * 60 * 60)\n"
+    "record.resume_event.wait(timeout=60 * 60)\n"
     "\n"
     "# Analyst submits — POST /api/runs/{id}/mismatch/resolve\n"
     "with record.lock:\n"
@@ -1388,7 +1388,7 @@ bullet(
     "parked on a threading.Event."
 )
 bullet(
-    "Abandoned reviews self-heal. The 2-hour timeout on resume_event.wait() "
+    "Abandoned reviews self-heal. The 1-hour timeout on resume_event.wait() "
     "means a closed tab eventually marks the run as stopped, the worker "
     "exits, and the JobRecord becomes evictable by idle-TTL. No thread leak."
 )
