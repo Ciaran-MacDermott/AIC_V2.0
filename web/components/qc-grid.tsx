@@ -6,6 +6,7 @@ import type {
   CellClassRules,
   CellValueChangedEvent,
   ColDef,
+  FirstDataRenderedEvent,
   ICellEditorParams,
 } from "ag-grid-community";
 import { useMemo, useRef } from "react";
@@ -93,6 +94,14 @@ export function QcGrid({
     onEdit(rowId, String(e.newValue ?? ""));
   }
 
+  // Size each column to its widest visible cell on first render.  Mirrors
+  // the Streamlit version's "fit columns to content" behaviour.  The
+  // defaultColDef minWidth/maxWidth caps still apply, so a single very
+  // long DESCRIPTION row can't blow the layout out.
+  function onFirstDataRendered(e: FirstDataRenderedEvent) {
+    e.api.autoSizeAllColumns();
+  }
+
   return (
     <div
       ref={containerRef}
@@ -116,6 +125,7 @@ export function QcGrid({
         paginationPageSize={50}
         paginationPageSizeSelector={[25, 50, 100, 200]}
         onCellValueChanged={onCellValueChanged}
+        onFirstDataRendered={onFirstDataRendered}
         singleClickEdit={false}
         stopEditingWhenCellsLoseFocus={true}
       />
