@@ -162,6 +162,12 @@ export function MismatchForm({
           intended value from the dropdowns; rows matching an expected pattern
           (PRIVATE LABEL / RESTRICTED / EXCLUDE) are greyed and typically
           require less review.
+          {hasDescription && (
+            <>
+              {" "}The DESCRIPTION column shows the first few words of each
+              row's description for context.
+            </>
+          )}
         </div>
       </div>
 
