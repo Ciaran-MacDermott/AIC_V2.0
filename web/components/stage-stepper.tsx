@@ -14,7 +14,7 @@ import type { JobState } from "@/lib/types";
 const PHASE2_STEPS: { key: JobState | "config"; label: string }[] = [
   { key: "running",          label: "1  Processing" },
   { key: "mismatch_pending", label: "2  Mismatch Review" },
-  { key: "done",             label: "3  Cleaned Output" },
+  { key: "done",             label: "3  Cleaned Output QC" },
   { key: "post_qc_running",  label: "4  Re-collapse" },
   { key: "post_qc_done",     label: "5  Export" },
 ];

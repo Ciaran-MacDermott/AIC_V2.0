@@ -444,7 +444,7 @@ def run_phase2_worker(record: JobRecord, directory_path: str,
     with record.lock:
         corrections = list(record.mismatch_corrections)
         interim = record.phase2_interim or _read_pickle(record.tmpdir / "interim.pkl")
-    set_state(record, state="running", stage_label="Resuming with corrections…")
+    set_state(record, state="running", stage_label="Applying cleanup…")
 
     # ── Phase B (resumed) ─────────────────────────────────────────────────
     try:
