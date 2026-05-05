@@ -563,7 +563,7 @@ function Phase2Page() {
                   a stale screen. */}
               <a
                 href={api.downloadUrl(postQcDownloadUrl)}
-                onClick={() => { window.setTimeout(() => { void onReset(); }, 1500); }}
+                onClick={() => { window.setTimeout(() => { void onReset(); }, 6000); }}
                 className="btn-primary inline-flex items-center"
               >
                 Download AIC_Phase2_3_exports.zip

@@ -25,17 +25,22 @@ function QcWizardPage() {
   const searchParams = useSearchParams();
   const runId = searchParams.get("runId") ?? "";
 
-  // Workflow-complete teardown: download click → wait briefly so the
-  // browser actually starts the file, then delete the run server-side
-  // (frees the tmpdir + slot immediately, no waiting for idle TTL) and
-  // navigate home to a fresh upload form.  The "Continue to Phase 2"
+  // Workflow-complete teardown: download click → wait so the browser
+  // actually finishes streaming the file, then delete the run server-
+  // side (frees the tmpdir + slot immediately, no waiting for idle TTL)
+  // and navigate home to a fresh upload form.  The "Continue to Phase 2"
   // button is the explicit path for analysts who want to keep going;
   // a plain Download click is the explicit "I'm done" signal.
+  //
+  // 6 s buffer: a slow first-byte (cold uvicorn worker, ad-blocker
+  // intercepting the GET) can stretch past a couple of seconds; this
+  // gives comfortable headroom without being long enough that a quick
+  // analyst sees the page hanging post-click.
   function finishAndReset(): void {
     window.setTimeout(() => {
       if (runId) api.remove(runId).catch(() => undefined);
       router.replace("/");
-    }, 1500);
+    }, 6000);
   }
 
   const [sheetList, setSheetList] = useState<QcSheetSummary[] | null>(null);
