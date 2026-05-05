@@ -283,7 +283,7 @@ export function MismatchForm({
           {isSubmitting
             ? "Submitting…"
             : isLast
-              ? "Submit & resume Phase B"
+              ? "Submit & resume Part B"
               : `Save & next  (${groupIdx + 2} of ${total})`}
         </button>
         <span className="text-xs text-zinc-500 ml-auto">
