@@ -631,13 +631,15 @@ async def create_phase2_run_from_parent(
     record = jobs.registry.create(
         phase="phase2", tmpdir=tmpdir, parent_run_id=parent.run_id,
     )
-    # Audit trail for the handoff: a "ModelInfo.txt not found" failure in
-    # the worker can then be diagnosed against the actual file layout
-    # instead of guessed at.
-    jobs.append_log(record, f"Phase 1 → Phase 2 handoff from run {parent.run_id}")
+    # Audit trail for the handoff — kept to one line so the run log stays
+    # focused on the actual pipeline output that follows.  If the handoff
+    # ends up missing a tool file, _log_phase2_inputs in the worker will
+    # dump the full layout for diagnosis at that point.
+    n = len(copied)
     jobs.append_log(
         record,
-        f"  Copied to project dir: {', '.join(copied) if copied else '(nothing)'}",
+        f"Phase 1 → Phase 2 handoff from run {parent.run_id} "
+        f"({n} file{'s' if n != 1 else ''} copied)",
     )
     inputs = _phase2_inputs_from_config(cfg)
     worker.start_phase2(record, str(project_dir), inputs)
@@ -704,10 +706,14 @@ def download_phase2_output(run_id: str) -> FileResponse:
     record = jobs.registry.get(run_id)
     if record is None or record.output_path is None or not record.output_path.exists():
         raise HTTPException(404, "Output workbook not available (run may have expired)")
+    # URL path stays /artifacts/output.xlsx for routing stability; the
+    # browser-visible save name comes from output_filename
+    # (CATEGORY_DATE_qc_output.xlsx) so analysts get a self-identifying
+    # file without renaming.
     return FileResponse(
         path=str(record.output_path),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename="output.xlsx",
+        filename=record.output_filename or "output.xlsx",
     )
 
 

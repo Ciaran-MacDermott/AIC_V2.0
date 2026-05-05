@@ -113,6 +113,11 @@ class JobRecord:
     # Pipeline outputs (populated on success).
     pipeline_payload: Optional[dict[str, Any]] = None     # FINAL/FLAT/META/dictEnsemble (Phase 1)
     output_path: Optional[Path] = None                    # finalised xlsx
+    # Friendly name surfaced to the browser via Content-Disposition (e.g.
+    # ``CHEESE_2026-05-05_qc_output.xlsx``); the on-disk filename stays
+    # ``output.xlsx`` so existing routes / post-QC re-uploads / tests don't
+    # need to track a per-run filename.
+    output_filename: Optional[str] = None
 
     # Post-QC re-upload outputs (Phase 2/3 only).
     post_qc_zip_path: Optional[Path] = None

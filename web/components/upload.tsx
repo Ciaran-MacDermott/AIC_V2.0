@@ -1,11 +1,17 @@
 "use client";
 
-import { useRef, useState, type DragEvent } from "react";
+import { useMemo, useRef, useState, type DragEvent } from "react";
 
 /**
  * File slot with a drag-and-drop affordance.  Drops only the first file
  * even when multiple are dropped — matches the underlying single-file
  * input contract on every upload route.
+ *
+ * A small client-side check on the picked file: extension must match the
+ * ``accept`` list and the file must be non-empty.  The pipeline itself
+ * does the deep validation (sheet names, required tool files, etc.) so
+ * we don't duplicate that work pre-upload — we just want a quick "yes,
+ * this looks like the right kind of file" tick.
  */
 export function FileSlot({
   label,
@@ -20,6 +26,18 @@ export function FileSlot({
 }) {
   const ref = useRef<HTMLInputElement | null>(null);
   const [dragging, setDragging] = useState(false);
+
+  // Parse the accept string ("." prefixed extensions, comma-separated).
+  // MIME types in accept are ignored — we only validate extensions.
+  const allowedExts = useMemo(
+    () => accept
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.startsWith(".")),
+    [accept],
+  );
+
+  const validation = useMemo(() => checkFile(file, allowedExts), [file, allowedExts]);
 
   function onDragOver(e: DragEvent<HTMLDivElement>) {
     e.preventDefault();
@@ -57,6 +75,7 @@ export function FileSlot({
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {file && validation && <ValidationBadge state={validation} />}
           {file && (
             <button
               type="button"
@@ -85,6 +104,49 @@ export function FileSlot({
         onChange={(e) => onPick(e.target.files?.[0] ?? null)}
       />
     </div>
+  );
+}
+
+
+type ValidationState = { ok: true } | { ok: false; reason: string };
+
+function checkFile(file: File | null, allowedExts: string[]): ValidationState | null {
+  if (!file) return null;
+  if (file.size === 0) return { ok: false, reason: "File is empty" };
+  if (allowedExts.length > 0) {
+    const name = file.name.toLowerCase();
+    if (!allowedExts.some((ext) => name.endsWith(ext))) {
+      return { ok: false, reason: `Expected ${allowedExts.join(" or ")}` };
+    }
+  }
+  return { ok: true };
+}
+
+
+function ValidationBadge({ state }: { state: ValidationState }) {
+  if (state.ok) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 text-[11px]"
+        title="File looks correct"
+      >
+        <svg viewBox="0 0 12 12" className="h-3 w-3 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M2.5 6.5 L5 9 L9.5 3.5" />
+        </svg>
+        file(s) ok
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full bg-red-50 text-red-700 border border-red-200 px-2 py-0.5 text-[11px] max-w-[16rem] truncate"
+      title={state.reason}
+    >
+      <svg viewBox="0 0 12 12" className="h-3 w-3 fill-none stroke-current" strokeWidth="2" strokeLinecap="round">
+        <path d="M3 3 L9 9 M9 3 L3 9" />
+      </svg>
+      {state.reason}
+    </span>
   );
 }
 

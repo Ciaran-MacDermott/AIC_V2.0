@@ -514,8 +514,7 @@ def aic_code(
     # ==================================================================
     # Step 1: Scan Directory for Input Files
     # ==================================================================
-    print(f"\n1) Scanning Directory for Input Files")
-    print(MINOR_SEP)
+    print(f"\n\n1) Scanning directory")
 
     if file_manifest:
         # Use pre-scanned manifest — skip redundant os.listdir calls
@@ -530,7 +529,7 @@ def aic_code(
             parsed_files[wb_name] = pd.ExcelFile(str(wb_path), engine="openpyxl")
 
         if skipped_files:
-            print(f"{INDENT}Skipped {len(skipped_files)} non-essential PHASE 2 file(s): {', '.join(skipped_files)}")
+            print(f"{INDENT}Skipped {len(skipped_files)} non-essential file(s): {', '.join(skipped_files)}")
 
         # Use pre-loaded tool DataFrames
         combined_attributes_df = file_manifest.get("combined_attributes_df")
@@ -648,8 +647,7 @@ def aic_code(
     # ==================================================================
     # Step 2: Parse Excel Workbook (FLAT_FILE, META, FINAL)
     # ==================================================================
-    print(f"\n2) Parsing Excel Workbook (FLAT_FILE, META, FINAL)")
-    print(MINOR_SEP)
+    print(f"\n\n2) Parsing workbook (FLAT_FILE, META, FINAL)")
 
     # Resolve config values from JSON
     brand_column_name = json_config.get("brandCol", "") if json_config else ""
@@ -660,8 +658,6 @@ def aic_code(
     workbook_keys = [k for k in parsed_files if re.match(expected_xlsx_pattern, k)]
 
     workbook = parsed_files[workbook_keys[0]] if workbook_keys else None
-    if workbook:
-        print(f"{INDENT}Found mapping file: {workbook_keys[0]}")
 
     if not workbook:
         raise FileNotFoundError(
@@ -702,9 +698,10 @@ def aic_code(
     template_df = _parse_sheet(workbook, "FINAL", index_col=None)
     template_columns = template_df.columns
 
-    print(f"{INDENT}  FLAT_FILE: {len(flat_file_df)} rows, {len(flat_file_df.columns)} columns")
-    print(f"{INDENT}  META: {len(meta_df)} attribute definitions")
-    print(f"{INDENT}  FINAL template: {len(template_columns)} columns")
+    print(
+        f"{INDENT}{workbook_keys[0]} → FLAT_FILE {len(flat_file_df)}×{len(flat_file_df.columns)}, "
+        f"META {len(meta_df)} attrs, FINAL {len(template_columns)} cols"
+    )
 
     # ==================================================================
     # Step 3: Early Duplicate ITEM_DIM_KEY Check
@@ -712,8 +709,7 @@ def aic_code(
     # attribute processing. Only deduplicates on ITEM_DIM_KEY —
     # rows with same SKU but different dim keys are preserved.
     # ==================================================================
-    print(f"\n3) Duplicate ITEM_DIM_KEY Check")
-    print(MINOR_SEP)
+    print(f"\n\n3) Duplicate ITEM_DIM_KEY check")
 
     col_upper_map = {str(c).upper(): c for c in flat_file_df.columns}
     dimkey_col = col_upper_map.get("ITEM_DIM_KEY")
@@ -767,8 +763,7 @@ def aic_code(
     # ==================================================================
     # Step 4: Attribute Assembly (MODELING / REPORTING)
     # ==================================================================
-    print(f"\n4) Attribute Assembly (MODELING / REPORTING)")
-    print(MINOR_SEP)
+    print(f"\n\n4) Attribute assembly (MODELING / REPORTING)")
 
     # Classify each attribute group as MODELING or REPORTING based on META
     attribute_type_map: Dict[str, str] = {}
@@ -787,9 +782,6 @@ def aic_code(
 
     modeling_count = sum(1 for t in attribute_type_map.values() if t == "MODELING")
     reporting_count = sum(1 for t in attribute_type_map.values() if t == "REPORTING")
-    print(f"{INDENT}{modeling_count} MODELING (left-join to lookup sheets on META key columns)")
-    print(f"{INDENT}{reporting_count} REPORTING (direct copy from MDM columns in FLAT_FILE)")
-    print(f"{INDENT}Filling null values with suffixed lookup values derived from Phase 1 and analyst QC")
 
     # Track columns already converted to string (avoid redundant conversions)
     string_converted_cols: set = set()
@@ -918,8 +910,10 @@ def aic_code(
             source_columns = attribute_key_cols_map[attribute_group]
             flat_file_df[attribute_group] = flat_file_df[source_columns]
 
-    print(f"{INDENT}✓ Processed {modeling_count} MODELING + {reporting_count} REPORTING attributes")
-    print(f"{INDENT}✓ All {modeling_count} lookup sheets passed cross-join prevention checks (no duplicate key→value mappings at Rank=1)")
+    print(
+        f"{INDENT}✓ Processed {modeling_count} MODELING + {reporting_count} REPORTING attributes "
+        f"({modeling_count} lookup sheets validated)"
+    )
 
     # Verify row count was not altered by MODELING attribute merges
     if len(flat_file_df) != original_row_count:
@@ -933,9 +927,7 @@ def aic_code(
     # matching. Special character replacement and SKU collapsing are
     # handled downstream in Phase 3 (quality.py, sku_collapse.py).
     # ==================================================================
-    print(f"\n5) Building Output DataFrame")
-    print(MINOR_SEP)
-    print(f"{INDENT}Mapping FLAT_FILE ({len(flat_file_df)} rows, {len(flat_file_df.columns)} cols) to template ({len(template_columns)} cols)")
+    print(f"\n\n5) Building output dataframe")
 
     # Pre-compute column mappings (avoid repeated fuzzy matching)
     flat_file_col_names = list(flat_file_df.columns)
@@ -971,7 +963,10 @@ def aic_code(
             columns_failed += 1
             print(f"{INDENT}⚠ Failed to copy '{col_name}' from '{source_col}': {col_error}")
 
-    print(f"{INDENT}✓ Built output: {output_df.shape[0]} rows, {output_df.shape[1]} cols ({mapped_count} mapped, {columns_failed} unmapped)")
+    built_summary = (
+        f"{output_df.shape[0]}×{output_df.shape[1]} "
+        f"({mapped_count} mapped, {columns_failed} unmapped)"
+    )
 
     if len(output_df) != len(flat_file_df):
         print(f"{INDENT}⚠ Row count mismatch: output ({len(output_df)}) != FLAT_FILE ({len(flat_file_df)})")
@@ -1008,11 +1003,12 @@ def aic_code(
                 integrity_issues.append(f"Lost {len(lost_dimkeys)} ITEM_DIM_KEYs not in output")
 
     if integrity_issues:
+        print(f"{INDENT}✓ Built output: {built_summary}")
         print(f"{INDENT}⚠ Integrity warnings:")
         for issue in integrity_issues:
             print(f"{INDENT}  - {issue}")
     else:
-        print(f"{INDENT}✓ Output validated post mapping: {len(final_df)} rows, {len(final_df.columns)} cols, all distinct DimKeys preserved")
+        print(f"{INDENT}✓ Built output: {built_summary} — DimKeys preserved")
 
     # Use df_override for QC if provided (for post-processing QC)
     qc_target_df = df_override if df_override is not None else final_df

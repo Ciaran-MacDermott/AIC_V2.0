@@ -48,8 +48,13 @@ def _indent_block(text: str, indent: str = INDENT) -> str:
 
 
 def _print_step_header(step: str, title: str) -> None:
-    """Print a consistently formatted step header (e.g. ``3) Demand Group Check``)."""
-    print(f"\n{step}) {title}")
+    """Print a consistently formatted step header (e.g. ``3) Demand Group Check``).
+
+    The leading double newline puts a blank line between segments so each
+    step stands out against its predecessor's output, rather than abutting
+    it.
+    """
+    print(f"\n\n{step}) {title}")
     print(MINOR_SEP)
 
 

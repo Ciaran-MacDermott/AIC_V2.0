@@ -150,24 +150,24 @@ export function MismatchForm({
     s.trim().split(/\s+/).slice(0, 3).join(" ");
 
   return (
-    <section className="space-y-4">
-      <div className="rounded-lg border border-amber-200 bg-amber-50 text-amber-900 p-4 text-sm">
-        <div className="font-medium mb-1">
+    <section className="space-y-3">
+      <div className="rounded-lg border border-amber-200 bg-amber-50 text-amber-900 p-3 text-xs">
+        <div className="font-medium text-sm mb-1">
           Brand mismatch review — {group.model_suffix || "base"}{" "}
           ({groupIdx + 1} of {total})
         </div>
         <div>
           Reviewing <code className="font-mono">{group.brand_col}</code> vs{" "}
           <code className="font-mono">{group.tool_brand_col}</code>. Pick the
-          intended value from the dropdowns; rows that match an expected
-          pattern (PRIVATE LABEL / RESTRICTED / EXCLUDE) are greyed and can be
-          left alone.
+          intended value from the dropdowns; rows matching an expected pattern
+          (PRIVATE LABEL / RESTRICTED / EXCLUDE) are greyed and typically
+          require less review.
         </div>
       </div>
 
       {/* Stepper */}
       <div className="flex items-center gap-2">
-        <div className="h-2 flex-1 rounded-full bg-brand-100 overflow-hidden">
+        <div className="h-1.5 flex-1 rounded-full bg-brand-100 overflow-hidden">
           <div
             className="h-full bg-brand-600 transition-all duration-300"
             style={{ width: `${((groupIdx + 1) / total) * 100}%` }}
@@ -186,15 +186,15 @@ export function MismatchForm({
         <table className="w-full text-sm">
           <thead className="bg-zinc-50 text-zinc-600 text-xs uppercase tracking-wide">
             <tr>
-              <th className="px-3 py-2 text-left whitespace-nowrap">{group.brand_col}</th>
-              <th className="px-3 py-2 text-left whitespace-nowrap">{group.tool_brand_col}</th>
+              <th className="px-3 py-1.5 text-left whitespace-nowrap">{group.brand_col}</th>
+              <th className="px-3 py-1.5 text-left whitespace-nowrap">{group.tool_brand_col}</th>
               {group.parent_col && (
-                <th className="px-3 py-2 text-left whitespace-nowrap">{group.parent_col}</th>
+                <th className="px-3 py-1.5 text-left whitespace-nowrap">{group.parent_col}</th>
               )}
               {hasDescription && <th className="px-3 py-2 text-left whitespace-nowrap">DESCRIPTION</th>}
               {hasRmrr        && <th className="px-3 py-2 text-left whitespace-nowrap">RMRR</th>}
-              <th className="px-3 py-2 text-left whitespace-nowrap">BRAND ✏</th>
-              <th className="px-3 py-2 text-left whitespace-nowrap">TOOL_BRAND ✏</th>
+              <th className="px-3 py-1.5 text-left whitespace-nowrap">BRAND ✏</th>
+              <th className="px-3 py-1.5 text-left whitespace-nowrap">TOOL_BRAND ✏</th>
             </tr>
           </thead>
           <tbody>
@@ -213,16 +213,16 @@ export function MismatchForm({
 
               return (
                 <tr key={ri} className={rowClass}>
-                  <td className="px-3 py-2 whitespace-nowrap">{row.BRAND}</td>
-                  <td className="px-3 py-2 whitespace-nowrap">{row.TOOL_BRAND}</td>
+                  <td className="px-3 py-1.5 whitespace-nowrap">{row.BRAND}</td>
+                  <td className="px-3 py-1.5 whitespace-nowrap">{row.TOOL_BRAND}</td>
                   {group.parent_col && (
-                    <td className="px-3 py-2 whitespace-nowrap">{row.PARENT ?? ""}</td>
+                    <td className="px-3 py-1.5 whitespace-nowrap">{row.PARENT ?? ""}</td>
                   )}
                   {hasDescription && (
-                    <td className="px-3 py-2 whitespace-nowrap">{firstThreeWords(row.DESCRIPTION ?? "")}</td>
+                    <td className="px-3 py-1.5 whitespace-nowrap">{firstThreeWords(row.DESCRIPTION ?? "")}</td>
                   )}
                   {hasRmrr && (
-                    <td className="px-3 py-2 whitespace-nowrap">
+                    <td className="px-3 py-1.5 whitespace-nowrap">
                       {row.RMRR === "RES" ? (
                         <span className="rounded bg-amber-100 text-amber-800 px-1.5 py-0.5">
                           RES
@@ -230,7 +230,7 @@ export function MismatchForm({
                       ) : ""}
                     </td>
                   )}
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-1.5">
                     <select
                       value={d.brand_new}
                       onChange={(e) => setDecision(ri, { brand_new: e.target.value })}
@@ -241,7 +241,7 @@ export function MismatchForm({
                       ))}
                     </select>
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-1.5">
                     <select
                       value={d.tool_brand_new}
                       onChange={(e) => setDecision(ri, { tool_brand_new: e.target.value })}
@@ -264,7 +264,7 @@ export function MismatchForm({
           type="button"
           disabled={isSubmitting}
           onClick={() => advanceWith([])}
-          className="rounded-md border border-zinc-300 text-zinc-700 hover:bg-zinc-50 text-sm font-medium px-3 py-2 disabled:opacity-50 transition-colors"
+          className="btn-secondary"
         >
           {isLast ? "No changes — finish" : "No changes — continue"}
         </button>
@@ -272,7 +272,7 @@ export function MismatchForm({
           type="button"
           disabled={isSubmitting}
           onClick={() => advanceWith(corrections_for_current_group())}
-          className="rounded-md bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium px-3 py-2 disabled:opacity-50 transition-colors"
+          className="btn-primary"
         >
           {isSubmitting
             ? "Submitting…"
@@ -281,7 +281,7 @@ export function MismatchForm({
               : `Save & next  (${groupIdx + 2} of ${total})`}
         </button>
         <span className="text-xs text-zinc-500 ml-auto">
-          Greyed rows match an expected pattern — safe to leave unchanged.
+          Greyed rows match an expected pattern — typically lower priority.
         </span>
       </div>
     </section>

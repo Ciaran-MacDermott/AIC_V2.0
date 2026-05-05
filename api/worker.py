@@ -359,11 +359,12 @@ _PHASE2_REQUIRED = (
 
 def _log_phase2_inputs(record: JobRecord, directory_path: str) -> None:
     """
-    List what's on disk under ``directory_path`` so the run log shows the
-    files Phase 2 will see before the pipeline starts.  Mirrors the
-    Streamlit page's start-of-run validation: faster diagnosis when a
-    'ModelInfo.txt not found' error fires (was it the zip layout, the
-    Phase 1 → Phase 2 handoff, or really a missing file?).
+    Confirm Phase 2 inputs before the pipeline starts.
+
+    Happy path collapses to a single line so the run log stays focused on
+    the pipeline output that follows.  If a required file is missing, fall
+    back to the full file/subdir layout so a 'ModelInfo.txt not found'
+    failure can be diagnosed against the actual disk state.
     """
     p = Path(directory_path)
     if not p.is_dir():
@@ -373,11 +374,11 @@ def _log_phase2_inputs(record: JobRecord, directory_path: str) -> None:
     items = sorted(p.iterdir(), key=lambda x: x.name)
     files   = [i.name for i in items if i.is_file()]
     subdirs = [i.name for i in items if i.is_dir()]
+    missing = [f for f in _PHASE2_REQUIRED if not (p / f).is_file()]
 
-    append_log(record, f"Project directory: {p}")
-    append_log(record, f"  Files: {', '.join(files) if files else '(none)'}")
-    if subdirs:
-        # Show one level of nesting so a wrapper folder is visible at a glance.
+    if missing:
+        append_log(record, f"Project directory: {p}")
+        append_log(record, f"  Files: {', '.join(files) if files else '(none)'}")
         for sub in subdirs:
             sub_path = p / sub
             try:
@@ -385,12 +386,13 @@ def _log_phase2_inputs(record: JobRecord, directory_path: str) -> None:
             except OSError:
                 inner = []
             append_log(record, f"  {sub}/: {', '.join(inner) if inner else '(empty)'}")
-
-    missing = [f for f in _PHASE2_REQUIRED if not (p / f).is_file()]
-    if missing:
         append_log(record, f"⚠ Required files missing at root: {', '.join(missing)}")
-    else:
-        append_log(record, "✓ All four required files present at root")
+        return
+
+    append_log(
+        record,
+        f"✓ Phase 2 inputs ready ({len(files)} file{'s' if len(files) != 1 else ''} at root)",
+    )
 
 
 def run_phase2_worker(record: JobRecord, directory_path: str,
@@ -587,6 +589,7 @@ def _run_phase_b(record: JobRecord, interim: Any,
 
     with record.lock:
         record.output_path = result.output_xlsx_path
+        record.output_filename = result.output_filename
 
 
 def _stash_mismatch(record: JobRecord, groups: list[dict[str, Any]],

@@ -17,9 +17,11 @@ progress bar lines up with the pipeline's actual position.
 
 from __future__ import annotations
 
+import re
 import threading
 import zipfile
 from dataclasses import dataclass
+from datetime import date
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional
@@ -128,6 +130,10 @@ class Phase2Result:
     collapsed_df:      pd.DataFrame
     duplicate_dimkeys: pd.DataFrame
     output_xlsx_path:  Path
+    # Friendly name surfaced to the browser via Content-Disposition.  The
+    # on-disk filename stays "output.xlsx" so existing routes / tests / the
+    # post-QC re-upload pipeline keep working unchanged.
+    output_filename:   str = "output.xlsx"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -220,18 +226,156 @@ def run_phase_b(state: Phase2InterimState,
         corrections=corrections,
     )
 
+    modeling_cols = _modeling_attribute_columns(
+        state.pipeline_context.get("meta_df")
+    )
+
     output_dir.mkdir(parents=True, exist_ok=True)
     output_xlsx = output_dir / "output.xlsx"
     with pd.ExcelWriter(output_xlsx, engine="xlsxwriter") as writer:
         collapsed_df.to_excel(writer, sheet_name="Cleaned Output", index=False)
+        _format_sheet(writer, collapsed_df, "Cleaned Output", modeling_cols)
         if dup_df is not None and not dup_df.empty:
             dup_df.to_excel(writer, sheet_name="Duplicate Keys", index=False)
+            _format_sheet(writer, dup_df, "Duplicate Keys", modeling_cols=())
 
     return Phase2Result(
         collapsed_df=collapsed_df,
         duplicate_dimkeys=dup_df,
         output_xlsx_path=output_xlsx,
+        output_filename=_derive_output_filename(collapsed_df),
     )
+
+
+# ── Output formatting helpers ────────────────────────────────────────────────
+#
+# The cleaned-output workbook is what analysts actually open in Excel for
+# post-pipeline QC, so a few small affordances dramatically streamline that
+# review:
+#   • Friendly filename derived from category + date so saved copies are
+#     self-identifying without renaming.
+#   • Grey, bold header row with a frozen top pane and an autofilter.
+#   • Per-column widths sized to content (capped) so cells aren't truncated
+#     to ``####`` or three letters wide.
+#   • Light-purple tint on MODELING attribute columns so the analyst can
+#     instantly distinguish modeling outputs from REPORTING / RAW / ID
+#     passthrough columns.
+
+# Cap column widths so a single 500-char DESCRIPTION row doesn't blow up
+# the worksheet layout.
+_COL_WIDTH_CAP = 60
+
+_HEADER_FILL          = "#D9D9D9"
+_HEADER_MODELING_FILL = "#C9B5DC"   # noticeably more purple than data tint
+_MODELING_CELL_FILL   = "#EEE6F5"   # very light purple — readable behind text
+
+
+def _modeling_attribute_columns(meta_df: Optional[pd.DataFrame]) -> list[str]:
+    """
+    Return the output columns whose META Attribute_Type is exclusively
+    MODELING.  Mirrors the classification logic in aic_phase2.aic_code so
+    the workbook tint matches what the pipeline treated as MODELING.
+    """
+    if meta_df is None or meta_df.empty:
+        return []
+    if "Attribute Group name" not in meta_df.columns or "Attribute_Type" not in meta_df.columns:
+        return []
+    out: list[str] = []
+    for grp_name, grp in meta_df.groupby("Attribute Group name"):
+        types = grp["Attribute_Type"].dropna().unique().tolist()
+        if types == ["MODELING"]:
+            out.append(str(grp_name))
+    return out
+
+
+def _derive_output_filename(df: pd.DataFrame) -> str:
+    """
+    Build ``CATEGORY_YYYY-MM-DD_qc_output.xlsx`` from the cleaned-output
+    dataframe.  The category is sourced from ASSORTMENT_CATEGORY_DEFINITION,
+    which Step 2 of the pipeline aligns to ModelInfo's Category_Name — so
+    every row carries the same value by the time we get here.
+
+    Falls back to ``OUTPUT_<date>_qc_output.xlsx`` if the column is missing
+    or all-blank, keeping the download path safe.
+    """
+    cat_col = next(
+        (c for c in df.columns if str(c).upper() == "ASSORTMENT_CATEGORY_DEFINITION"),
+        None,
+    )
+    cat_raw = ""
+    if cat_col is not None and len(df):
+        non_null = df[cat_col].dropna()
+        if not non_null.empty:
+            cat_raw = str(non_null.iloc[0]).strip()
+
+    # Sanitise for filesystem (and for URL-encoding sanity in Content-
+    # Disposition) — strip anything that isn't alphanumeric, hyphen, or
+    # underscore.
+    cat = re.sub(r"[^A-Za-z0-9]+", "_", cat_raw).strip("_") or "OUTPUT"
+    return f"{cat}_{date.today().isoformat()}_qc_output.xlsx"
+
+
+def _format_sheet(writer: "pd.ExcelWriter", df: pd.DataFrame,
+                  sheet_name: str, modeling_cols: tuple[str, ...] | list[str] = ()
+                  ) -> None:
+    """
+    Apply the standard Cleaned Output layout to ``sheet_name``: grey
+    header, sized columns, autofilter, frozen top row, plus light-purple
+    tint on any column whose name appears in ``modeling_cols``.
+    """
+    workbook = writer.book
+    worksheet = writer.sheets[sheet_name]
+
+    header_fmt = workbook.add_format({
+        "bg_color": _HEADER_FILL,
+        "bold":     True,
+        "border":   1,
+        "align":    "left",
+        "valign":   "vcenter",
+    })
+    header_modeling_fmt = workbook.add_format({
+        "bg_color": _HEADER_MODELING_FILL,
+        "bold":     True,
+        "border":   1,
+        "align":    "left",
+        "valign":   "vcenter",
+    })
+    modeling_cell_fmt = workbook.add_format({"bg_color": _MODELING_CELL_FILL})
+
+    modeling_set = {str(c).strip().upper() for c in modeling_cols}
+    n_rows = len(df)
+    n_cols = len(df.columns)
+
+    for col_idx, col_name in enumerate(df.columns):
+        is_modeling = str(col_name).strip().upper() in modeling_set
+
+        # Column width sized to max(header, longest cell) + 2, capped.
+        if n_rows:
+            col_data = df[col_name].astype(str)
+            max_content = int(col_data.str.len().max() or 0)
+        else:
+            max_content = 0
+        width = min(max(len(str(col_name)), max_content) + 2, _COL_WIDTH_CAP)
+
+        # set_column's optional format applies to data cells in this column
+        # that don't have an explicit cell-level format.  pandas' to_excel
+        # writes raw values without per-cell formats, so the modeling tint
+        # takes effect here.  The header cell gets overwritten below.
+        if is_modeling:
+            worksheet.set_column(col_idx, col_idx, width, modeling_cell_fmt)
+        else:
+            worksheet.set_column(col_idx, col_idx, width)
+
+        worksheet.write(
+            0, col_idx, str(col_name),
+            header_modeling_fmt if is_modeling else header_fmt,
+        )
+
+    if n_rows > 0 and n_cols > 0:
+        # Autofilter spans header (row 0) through the last data row.
+        worksheet.autofilter(0, 0, n_rows, n_cols - 1)
+        # Freeze the header so it stays visible while the analyst scrolls.
+        worksheet.freeze_panes(1, 0)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

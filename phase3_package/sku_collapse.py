@@ -41,8 +41,12 @@ def _indent_block(text: str, indent: str = INDENT) -> str:
 
 
 def _print_step_header(step: str, title: str) -> None:
-    """Print a consistently formatted step header."""
-    print(f"\n{step}) {title}")
+    """Print a consistently formatted step header.
+
+    Leading double newline keeps each step visually separated from the
+    previous step's output instead of abutting it.
+    """
+    print(f"\n\n{step}) {title}")
     print(MINOR_SEP)
 
 
