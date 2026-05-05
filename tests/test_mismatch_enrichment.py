@@ -117,15 +117,18 @@ def test_build_mismatch_display_omits_rmrr_when_no_flagged_rows() -> None:
 
 def test_expected_flags_marks_restricted_pattern() -> None:
     df = pd.DataFrame([
-        {"BRAND": "ACME", "TOOL_BRAND": "ACME RESTRICTED"},  # _is_expected
-        {"BRAND": "ACME", "TOOL_BRAND": "ACMI"},              # genuine
-        {"BRAND": "OMEGA", "TOOL_BRAND": "PRIVATE LABEL OMG"}, # _is_expected
-        {"BRAND": "PRIVATE LABEL X", "TOOL_BRAND": "PL X"},   # _is_expected
-        {"BRAND": "FOO", "TOOL_BRAND": "FOO EXCLUDE NOW"},    # _is_expected
+        {"BRAND": "ACME", "TOOL_BRAND": "ACME RESTRICTED"},        # _is_expected
+        {"BRAND": "ACME", "TOOL_BRAND": "ACMI"},                    # genuine
+        {"BRAND": "OMEGA", "TOOL_BRAND": "PRIVATE LABEL OMG"},      # _is_expected
+        {"BRAND": "PRIVATE LABEL X", "TOOL_BRAND": "PRIVATE LABEL Y"},  # _is_expected
+        {"BRAND": "FOO", "TOOL_BRAND": "FOO EXCLUDE NOW"},          # _is_expected
+        # Regression: a PRIVATE LABEL brand against a genuinely different
+        # tool brand must NOT be flagged as expected.
+        {"BRAND": "PRIVATE LABEL", "TOOL_BRAND": "AO BRANDS"},      # genuine
     ])
 
     flags = expected_flags(df, brand_override_rules=[])
-    assert flags.tolist() == [True, False, True, True, True]
+    assert flags.tolist() == [True, False, True, True, True, False]
 
 
 def test_expected_flags_includes_configured_brand_overrides() -> None:

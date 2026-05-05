@@ -401,11 +401,21 @@ def expected_flags(mm: "pd.DataFrame",
     """
     t_up = mm["TOOL_BRAND"].astype(str).str.upper()
     b_up = mm["BRAND"].astype(str).str.upper()
+    # When BRAND is PRIVATE LABEL, only treat the row as expected if
+    # TOOL_BRAND is also in the safe set — PRIVATE LABEL / EXCLUDE(D) /
+    # RESTRICTED.  Without this gate a PRIVATE-LABEL brand vs a genuine
+    # different tool brand (e.g. "AO BRANDS") was being greyed even though
+    # it's a real mismatch.
+    pl_safe_tool_brand = (
+        t_up.str.startswith("PRIVATE LABEL", na=False)
+        | t_up.str.contains("EXCLUDE", na=False)
+        | t_up.str.contains("RESTRICTED", na=False)
+    )
     flag = (
         (t_up == b_up + " RESTRICTED")
         | t_up.str.contains("EXCLUDE", na=False)
         | t_up.str.startswith("PRIVATE LABEL", na=False)
-        | b_up.str.startswith("PRIVATE LABEL", na=False)
+        | (b_up.str.startswith("PRIVATE LABEL", na=False) & pl_safe_tool_brand)
     )
     override_set: set[tuple[str, str]] = set()
     for row in brand_override_rules or []:
