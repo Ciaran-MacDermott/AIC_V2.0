@@ -131,7 +131,15 @@ class BrandOverrideRule(BaseModel):
 
 class BrandOverrideConfig(BaseModel):
     enable:               bool = False
+    # Drives manufacturer matching for the brand-override cleanup steps
+    # (10.6 / 11) in phase3_package/transforms.py.
     raw_manufacturer_col: str  = "RAW_MANUFACTURER"
+    # Drives Step 5 private-label retailer detection (apply_private_label_rules)
+    # AND the PARENT column rendered in the BRAND-vs-TOOL_BRAND mismatch
+    # dialog (Step 13).  Split from raw_manufacturer_col so analysts who
+    # need to surface retailer values (e.g. "CVS PHARMACY") in the dialog
+    # don't break manufacturer-side cleanup by changing one shared field.
+    raw_parent_col:       str  = "RAW_PARENT"
     brand_col:            str  = "BRAND"
     tool_brand_col:       str  = "TOOL_BRAND"
     rules:                list[BrandOverrideRule] = []
@@ -213,9 +221,11 @@ class Phase2ScanResult(BaseModel):
     scan_id:                   str
     raw_upc_columns:           list[str]
     raw_manufacturer_columns:  list[str]
+    raw_parent_columns:        list[str]
     all_columns:               list[str]
     default_upc_col:           str
     default_manufacturer_col:  str
+    default_parent_col:        str
     manufacturer_values:       list[str]
     brand_values:              list[str]
     tool_brand_values:         list[str]

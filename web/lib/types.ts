@@ -114,6 +114,7 @@ export type PrivateLabelRule = {
 export type BrandOverrideConfig = {
   enable: boolean;
   raw_manufacturer_col: string;
+  raw_parent_col: string;
   brand_col: string;
   tool_brand_col: string;
   rules: { manufacturers: string[]; brand_overrides: Record<string, string> }[];
@@ -165,9 +166,11 @@ export type Phase2ScanResult = {
   scan_id: string;
   raw_upc_columns: string[];
   raw_manufacturer_columns: string[];
+  raw_parent_columns: string[];
   all_columns: string[];
   default_upc_col: string;
   default_manufacturer_col: string;
+  default_parent_col: string;
   // Default-column values, kept for backward compat — the brand-override
   // rule editor now sources from `column_values` keyed on the active
   // column name so it tracks the user's column-name picks.

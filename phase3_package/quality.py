@@ -563,16 +563,21 @@ def check_brand_tool_brand_mismatch(
     brand_col: str = "BRAND",
     tool_brand_col: str = "TOOL_BRAND",
     raw_manufacturer_col: str = "",
+    raw_parent_col: str = "",
     valid_model_suffixes: set = None,
 ) -> List[Dict[str, Any]]:
     """
     Compare BRAND vs TOOL_BRAND (including model-suffixed variants) and
     report unexpected mismatches.
 
-    When *raw_manufacturer_col* is provided and any mismatched BRAND or
-    TOOL_BRAND value starts with ``"AO "``, the manufacturer column is
-    included in the distinct-pair grouping so that each parent gets its
-    own row in the resolution dialog.
+    When *raw_parent_col* (preferred) or *raw_manufacturer_col* (legacy
+    fallback) resolves to a real column and any mismatched BRAND or
+    TOOL_BRAND value starts with ``"AO "``, the parent column is included
+    in the distinct-pair grouping so that each parent gets its own row in
+    the resolution dialog — and surfaced as the dialog's ``PARENT``
+    header.  Splitting parent and manufacturer means analysts can see
+    retailer values (e.g. "CVS PHARMACY") in the dialog without losing
+    manufacturer-side cleanup configurability.
 
     Returns a list of per-model mismatch groups.  Each group is a dict::
 
@@ -590,10 +595,14 @@ def check_brand_tool_brand_mismatch(
 
     col_upper_map = {str(c).upper(): c for c in df.columns}
 
-    # --- Resolve manufacturer column for AO-brand parent inclusion ---------
-    mfr_col_actual = None
-    if raw_manufacturer_col:
-        mfr_col_actual = col_upper_map.get(raw_manufacturer_col.upper())
+    # --- Resolve parent column for AO-brand grouping + PARENT display ------
+    # Prefer raw_parent_col (the dedicated dialog/PL setting); fall back to
+    # raw_manufacturer_col for legacy callers that haven't migrated yet.
+    parent_col_actual = None
+    if raw_parent_col:
+        parent_col_actual = col_upper_map.get(raw_parent_col.upper())
+    if parent_col_actual is None and raw_manufacturer_col:
+        parent_col_actual = col_upper_map.get(raw_manufacturer_col.upper())
 
     # --- Find all BRAND / TOOL_BRAND column pairs (including suffixed) -----
     suffix_whitelist = (
@@ -711,11 +720,11 @@ def check_brand_tool_brand_mismatch(
             continue
 
         # Distinct mismatched pairs (using actual column names)
-        # When AO brands are present and manufacturer column is available,
-        # include the manufacturer in the grouping so each parent gets its
-        # own row — helps spot incorrectly mapped client suffixes.
+        # When AO brands are present and a parent column is available,
+        # include the parent in the grouping so each parent gets its own
+        # row — helps spot incorrectly mapped client suffixes.
         include_parent = False
-        if mfr_col_actual:
+        if parent_col_actual:
             brand_vals_upper = df.loc[mismatch_mask, brand_column].astype(str).str.upper()
             tool_vals_upper = df.loc[mismatch_mask, tool_column].astype(str).str.upper()
             include_parent = (
@@ -724,8 +733,8 @@ def check_brand_tool_brand_mismatch(
             )
 
         if include_parent:
-            group_cols = [brand_column, tool_column, mfr_col_actual]
-            rename_map = {brand_column: "BRAND", tool_column: "TOOL_BRAND", mfr_col_actual: "PARENT"}
+            group_cols = [brand_column, tool_column, parent_col_actual]
+            rename_map = {brand_column: "BRAND", tool_column: "TOOL_BRAND", parent_col_actual: "PARENT"}
         else:
             group_cols = [brand_column, tool_column]
             rename_map = {brand_column: "BRAND", tool_column: "TOOL_BRAND"}
@@ -746,7 +755,7 @@ def check_brand_tool_brand_mismatch(
             "brand_col": brand_column,
             "tool_brand_col": tool_column,
             "mismatch_df": distinct_pairs.rename(columns=rename_map),
-            "parent_col": mfr_col_actual if include_parent else None,
+            "parent_col": parent_col_actual if include_parent else None,
         })
 
     if total_mismatches == 0:

@@ -25,6 +25,10 @@ from typing import Optional
 # pages/2_Phase_3_Pipeline_and_QC.py — change in lock-step.
 _UPC_PRIORITY = ["RAW_BRAND", "RAW_TRADEMARK", "RAW_SUB_BRAND", "RAW_US_TRADEMARK"]
 _MFR_PRIORITY = ["RAW_MANUFACTURER", "RAW_PARENT", "RAW_US_PARENT"]
+# Parent priority is distinct from manufacturer: the dialog and the
+# private-label retailer detection both want the column whose values are
+# retailer-shaped (e.g. "CVS PHARMACY"), not the manufacturer name.
+_PARENT_PRIORITY = ["RAW_PARENT", "RAW_US_PARENT", "RAW_MANUFACTURER"]
 
 
 class InputError(ValueError):
@@ -105,9 +109,11 @@ def find_phase1_inputs(root: Path) -> tuple[Path, Path]:
 class Phase2Scan:
     raw_upc_columns:           list[str]
     raw_manufacturer_columns:  list[str]
+    raw_parent_columns:        list[str]
     all_columns:               list[str]
     default_upc_col:           str
     default_manufacturer_col:  str
+    default_parent_col:        str
     manufacturer_values:       list[str]
     brand_values:              list[str]
     tool_brand_values:         list[str]
@@ -161,6 +167,10 @@ def scan_phase2_xlsx(xlsx_path: Path) -> Phase2Scan:
         (raw_upper[m] for m in _MFR_PRIORITY if m in raw_upper),
         raw_cols[0] if raw_cols else "",
     )
+    default_parent = next(
+        (raw_upper[m] for m in _PARENT_PRIORITY if m in raw_upper),
+        raw_cols[0] if raw_cols else "",
+    )
 
     def _uniq(col: str) -> list[str]:
         if col in df.columns:
@@ -174,9 +184,11 @@ def scan_phase2_xlsx(xlsx_path: Path) -> Phase2Scan:
     return Phase2Scan(
         raw_upc_columns=raw_cols,
         raw_manufacturer_columns=raw_cols,   # same set; UI surfaces both
+        raw_parent_columns=raw_cols,         # parent picker draws from the same RAW_* set
         all_columns=all_cols,
         default_upc_col=default_upc,
         default_manufacturer_col=default_mfr,
+        default_parent_col=default_parent,
         manufacturer_values=_uniq(default_mfr),
         brand_values=_uniq("BRAND"),
         tool_brand_values=_uniq("TOOL_BRAND"),

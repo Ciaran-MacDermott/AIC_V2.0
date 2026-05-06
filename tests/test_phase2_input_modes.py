@@ -168,9 +168,13 @@ def test_phase2_scan_returns_default_upc_and_mfr_columns(
 
     assert body["raw_upc_columns"], body
     assert body["raw_manufacturer_columns"], body
+    assert body["raw_parent_columns"], body
     # Defaults match the priority lists in pages/2_Phase_3_Pipeline_and_QC.py.
     assert body["default_upc_col"]            in body["raw_upc_columns"]
     assert body["default_manufacturer_col"]   in body["raw_manufacturer_columns"]
+    # Parent picker has its own priority (RAW_PARENT first) so the dialog
+    # surfaces retailer values instead of manufacturer values.
+    assert body["default_parent_col"]         in body["raw_parent_columns"]
     # Brand + tool-brand value lists power the mismatch dropdowns.
     assert "ACME" in body["brand_values"]
     assert "ACME" in body["tool_brand_values"]

@@ -38,6 +38,7 @@ function defaultBrandOverride(): BrandOverrideConfig {
     // when the analyst doesn't add any overrides.
     enable: true,
     raw_manufacturer_col: "RAW_MANUFACTURER",
+    raw_parent_col: "RAW_PARENT",
     brand_col: "BRAND",
     tool_brand_col: "TOOL_BRAND",
     rules: [],
@@ -113,13 +114,13 @@ function Phase2Page() {
         if (cancelled) return;
         setScan(s);
         setRawUpcCol(s.default_upc_col || "RAW_BRAND");
-        // Pre-fill the Brand Override RAW MFR column from the autodetect.
-        if (s.default_manufacturer_col) {
-          setBrandOverride((prev) => ({
-            ...prev,
-            raw_manufacturer_col: s.default_manufacturer_col,
-          }));
-        }
+        // Pre-fill manufacturer + parent column pickers from the autodetect
+        // so the analyst doesn't have to set them manually on every run.
+        setBrandOverride((prev) => ({
+          ...prev,
+          ...(s.default_manufacturer_col && { raw_manufacturer_col: s.default_manufacturer_col }),
+          ...(s.default_parent_col && { raw_parent_col: s.default_parent_col }),
+        }));
       })
       .catch(() => { if (!cancelled) setScan(null); })
       .finally(() => { if (!cancelled) setScanning(false); });
@@ -140,12 +141,11 @@ function Phase2Page() {
         if (cancelled) return;
         setScan(s);
         setRawUpcCol(s.default_upc_col || "RAW_BRAND");
-        if (s.default_manufacturer_col) {
-          setBrandOverride((prev) => ({
-            ...prev,
-            raw_manufacturer_col: s.default_manufacturer_col,
-          }));
-        }
+        setBrandOverride((prev) => ({
+          ...prev,
+          ...(s.default_manufacturer_col && { raw_manufacturer_col: s.default_manufacturer_col }),
+          ...(s.default_parent_col && { raw_parent_col: s.default_parent_col }),
+        }));
       })
       .catch(() => { if (!cancelled) setScan(null); })
       .finally(() => { if (!cancelled) setScanning(false); });

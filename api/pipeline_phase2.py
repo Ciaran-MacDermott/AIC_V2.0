@@ -97,6 +97,7 @@ DEFAULT_PRIVATE_LABEL_CONFIG: dict[str, Any] = {
 DEFAULT_BRAND_OVERRIDE_CONFIG: dict[str, Any] = {
     "enable":               False,
     "raw_manufacturer_col": "RAW_MANUFACTURER",
+    "raw_parent_col":       "RAW_PARENT",
     "brand_col":            "BRAND",
     "tool_brand_col":       "TOOL_BRAND",
     "rules":                [],

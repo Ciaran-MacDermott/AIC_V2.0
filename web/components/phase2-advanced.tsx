@@ -137,7 +137,7 @@ export function Phase2AdvancedConfig({
           </table>
 
           <label className="block text-xs text-zinc-600">
-            <span className="block mb-1">PL base name override</span>
+            <span className="block mb-1">Private-label target attribute (default: TOOL_BRAND)</span>
             <ColumnSelect
               value={plBaseName}
               onChange={setPlBaseName}
@@ -145,6 +145,47 @@ export function Phase2AdvancedConfig({
               emptyLabel="(blank = use TOOL_BRAND)"
               fallbackPlaceholder="(blank = use TOOL_BRAND)"
             />
+            <span className="block mt-1 text-[11px] text-zinc-500">
+              Leave blank for standard projects. Pick a different attribute (e.g. SUBBRAND)
+              for multi-model projects where PL retagging applies to TOOL_SUBBRAND_*
+              variants instead of TOOL_BRAND.
+            </span>
+          </label>
+
+          {/* Parent column — drives PL retailer detection (Step 5) and the
+              PARENT column rendered in the BRAND-vs-TOOL_BRAND mismatch
+              dialog (Step 13).  Lives in the Private Label section because
+              that's where its effect shows up; kept separate from the
+              brand-override rule editor's column pickers so swapping it
+              doesn't surprise the analyst into losing PL/CVS visibility. */}
+          <label className="block text-xs text-zinc-600">
+            <span className="block mb-1">Parent column (PL detection + mismatch dialog)</span>
+            {scan && scan.raw_parent_columns.length > 0 ? (
+              <select
+                value={brandOverride.raw_parent_col}
+                onChange={(e) =>
+                  setBrandOverride({ ...brandOverride, raw_parent_col: e.target.value })
+                }
+                className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
+              >
+                {scan.raw_parent_columns.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                value={brandOverride.raw_parent_col}
+                onChange={(e) =>
+                  setBrandOverride({ ...brandOverride, raw_parent_col: e.target.value })
+                }
+                className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
+              />
+            )}
+            <span className="block mt-1 text-[11px] text-zinc-500">
+              Pick the column with retailer/parent values (e.g. RAW_PARENT) so private-label
+              retailers like CVS surface in the mismatch dialog.
+            </span>
           </label>
         </section>
 
@@ -158,8 +199,9 @@ export function Phase2AdvancedConfig({
           <div>
             <div className="text-sm font-semibold text-brand-700">Client Brand rules</div>
             <p className="text-xs text-zinc-500 mt-0.5">
-              Force-map specific (manufacturer, brand) client pairs to a
-              different TOOL_BRAND value. Check the scope form for confirmation.
+              Force-map (manufacturer, BRAND) pairs to a specific TOOL_BRAND value.
+              Each rule rewrites TOOL_BRAND only on rows where the manufacturer column
+              matches one of the listed values — leaving every other row untouched.
             </p>
           </div>
 
@@ -170,7 +212,7 @@ export function Phase2AdvancedConfig({
               instead of drifting because of table auto-sizing. */}
           <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1fr_2.5rem] gap-3">
             <label className="block text-xs text-zinc-600">
-              <span className="block mb-1">RAW manufacturer column</span>
+              <span className="block mb-1">Manufacturer column (override rules)</span>
               {scan && scan.raw_manufacturer_columns.length > 0 ? (
                 <select
                   value={brandOverride.raw_manufacturer_col}
@@ -193,6 +235,9 @@ export function Phase2AdvancedConfig({
                   className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
                 />
               )}
+              <span className="block mt-1 text-[11px] text-zinc-500">
+                Used only to match each rule's manufacturer values — separate from the Parent column above.
+              </span>
             </label>
             <label className="block text-xs text-zinc-600">
               <span className="block mb-1">BRAND column</span>

@@ -243,8 +243,19 @@ def run_through_step_12(
     # Step 4: Overwrite UPC10 with ITEM_DIM_KEY for private label rows
     df = overwrite_upc10_for_private_label(df, raw_upc_pl_brand_col)
 
-    # Step 5: Apply retailer-specific private label tagging
-    df = apply_private_label_rules(df, private_label_config, show_examples=True, valid_model_suffixes=valid_model_suffixes, pl_base_name=pl_base_name)
+    # Step 5: Apply retailer-specific private label tagging.  raw_parent_col
+    # is sourced from the brand-override config so the analyst's choice is
+    # honored end-to-end (detection + dialog).  Falls back to the function
+    # default ("RAW_PARENT") when not configured.
+    raw_parent_col = brand_override_config.get("raw_parent_col", "RAW_PARENT") or "RAW_PARENT"
+    df = apply_private_label_rules(
+        df,
+        private_label_config,
+        raw_parent_col=raw_parent_col,
+        show_examples=True,
+        valid_model_suffixes=valid_model_suffixes,
+        pl_base_name=pl_base_name,
+    )
 
     # Step 6: Check UPC10/SKU/ITEM_DIM_KEY for scientific notation / decimals
     check_identifier_numeric_format(df, cols=("UPC10", "SKU", "ITEM_DIM_KEY"))
@@ -275,10 +286,14 @@ def run_through_step_12(
     if not skip_rmrr:
         df = raw_multi_restricted_overrides(df, valid_model_suffixes=valid_model_suffixes)
 
-    # Step 12.5: QC — flag BRAND vs TOOL_BRAND mismatches (potential DB logic issues)
+    # Step 12.5: QC — flag BRAND vs TOOL_BRAND mismatches (potential DB logic issues).
+    # raw_parent_col drives both AO grouping and the dialog's PARENT column;
+    # raw_manufacturer_col is passed for the legacy fallback path inside the
+    # check (kept so configs that haven't migrated still work).
     mismatch_groups = check_brand_tool_brand_mismatch(
         df,
         raw_manufacturer_col=brand_override_config.get("raw_manufacturer_col", ""),
+        raw_parent_col=raw_parent_col,
         valid_model_suffixes=valid_model_suffixes,
     )
 
@@ -291,6 +306,7 @@ def run_through_step_12(
         "input_dir": str(input_dir),
         "is_custom_collapse": is_custom_collapse,
         "raw_manufacturer_col": brand_override_config.get("raw_manufacturer_col", ""),
+        "raw_parent_col": raw_parent_col,
         "valid_model_suffixes": valid_model_suffixes,
     }
 
@@ -331,9 +347,18 @@ def run_from_step_14(
     is_custom_collapse = pipeline_context["is_custom_collapse"]
 
     # --- Apply user corrections to BRAND / TOOL_BRAND --------------------
+    # The dialog renders the parent column under the PARENT header, so the
+    # `parent` value on each correction matches raw_parent_col.  Keep
+    # raw_manufacturer_col as a fallback for older contexts that haven't
+    # been re-emitted by Phase A yet.
+    raw_parent_col = pipeline_context.get("raw_parent_col", "")
     raw_manufacturer_col = pipeline_context.get("raw_manufacturer_col", "")
     col_upper_map = {str(c).upper(): c for c in df.columns}
-    mfr_col_actual = col_upper_map.get(raw_manufacturer_col.upper()) if raw_manufacturer_col else None
+    parent_col_actual = (
+        col_upper_map.get(raw_parent_col.upper()) if raw_parent_col else None
+    )
+    if parent_col_actual is None and raw_manufacturer_col:
+        parent_col_actual = col_upper_map.get(raw_manufacturer_col.upper())
 
     if corrections:
         brand_count = 0
@@ -350,10 +375,13 @@ def run_from_step_14(
                 & (df[tool_col_name].astype(str).str.upper() == fix["tool_brand_old"].upper())
             )
 
-            # Narrow by parent manufacturer when available (AO brand rows)
+            # Narrow by parent value when available (AO brand rows).  The
+            # column resolved above matches whatever the dialog rendered
+            # under the PARENT header, so analyst-supplied parent values
+            # land on the right rows even after the parent/manufacturer split.
             parent_val = fix.get("parent", "")
-            if parent_val and mfr_col_actual:
-                mask = mask & (df[mfr_col_actual].astype(str).str.upper() == parent_val.upper())
+            if parent_val and parent_col_actual:
+                mask = mask & (df[parent_col_actual].astype(str).str.upper() == parent_val.upper())
 
             n_rows = int(mask.sum())
             rows_updated += n_rows
