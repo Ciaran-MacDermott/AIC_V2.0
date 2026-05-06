@@ -697,7 +697,6 @@ def _phase2_inputs_from_config(cfg: Phase2Config) -> Phase2Inputs:
         brand_override_config=bo_cfg,
         is_custom_collapse=cfg.is_custom_collapse,
         skip_rmrr=cfg.skip_rmrr,
-        pl_base_name=cfg.pl_base_name,
     )
 
 

@@ -98,8 +98,6 @@ DEFAULT_BRAND_OVERRIDE_CONFIG: dict[str, Any] = {
     "enable":               False,
     "raw_manufacturer_col": "RAW_MANUFACTURER",
     "raw_parent_col":       "RAW_PARENT",
-    "brand_col":            "BRAND",
-    "tool_brand_col":       "TOOL_BRAND",
     "rules":                [],
 }
 
@@ -112,7 +110,6 @@ class Phase2Inputs:
     brand_override_config: dict[str, Any]
     is_custom_collapse:    bool = False
     skip_rmrr:             bool = False
-    pl_base_name:          str = ""
 
 
 @dataclass
@@ -186,7 +183,6 @@ def run_phase_a(directory_path: Path, inputs: Phase2Inputs,
         brand_override_config=inputs.brand_override_config,
         is_custom_collapse=inputs.is_custom_collapse,
         skip_rmrr=inputs.skip_rmrr,
-        pl_base_name=inputs.pl_base_name,
     )
 
     state = Phase2InterimState(

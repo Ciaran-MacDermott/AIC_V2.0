@@ -316,10 +316,15 @@ def _model_info_txt() -> str:
 
 
 def _attributes_txt() -> str:
+    # Real-shape Attributes.txt: Brand_Attribute=Y on the TOOL_BRAND row tells
+    # the pipeline which column receives PL labels and which BRAND/TOOL_BRAND
+    # pair brand-override rules iterate.  Old test fixtures used a leaner
+    # shape without this flag — kept here in real shape so the integration
+    # suite exercises the autodetect path the production code follows.
     return (
-        "Attribute_Id|Attribute_Name|Attribute_Type|Attribute_Group\n"
-        "1|BRAND|MODELING|BRAND\n"
-        "2|PACK_SIZE|MODELING|PACK_SIZE\n"
+        "Model_Id|Attribute_Id|Attribute_Name|Brand_Attribute|Display_Only_Attribute|Attribute_Weight\n"
+        "TEST_M1|1|TOOL_BRAND|Y|N|1.0\n"
+        "TEST_M1|2|PACK_SIZE|N|N|1.0\n"
     )
 
 

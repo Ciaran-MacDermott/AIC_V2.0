@@ -123,14 +123,77 @@ class Phase2Scan:
     # in the column-name fields above, instead of being hard-coded to
     # the BRAND / TOOL_BRAND / default-manufacturer columns.
     column_values:             dict[str, list[str]]
+    # Literal (brand_col, tool_brand_col) pairs resolved from each
+    # Attributes.txt's Brand_Attribute=Y row.  Empty when the project has
+    # no Attributes.txt (loose-file mode) or no Brand_Attribute column
+    # (legacy data).  Mirrored 1:1 to Phase2ScanResult.detected_brand_pairs.
+    detected_brand_pairs:      list[dict[str, str]]
 
 
-def scan_phase2_xlsx(xlsx_path: Path) -> Phase2Scan:
+def _resolve_brand_pairs_from_dir(root: Path) -> list[tuple[str, str]]:
+    """
+    Walk ``root`` for every Attributes.txt (root + immediate subdirs) and
+    collect literal (brand_col, tool_brand_col) tuples from each
+    Brand_Attribute=Y row.  Returns deduplicated, ordered pairs.
+
+    Returns an empty list when no Attributes.txt is present or none carry
+    a Brand_Attribute column — callers fall back to legacy BRAND /
+    TOOL_BRAND assumptions in that case.
+    """
+    try:
+        import pandas as pd  # local
+    except ImportError:
+        return []
+
+    attribute_files: list[Path] = []
+    root_attr = root / "Attributes.txt"
+    if root_attr.is_file():
+        attribute_files.append(root_attr)
+    for sub in sorted(root.iterdir()) if root.is_dir() else []:
+        if not sub.is_dir():
+            continue
+        sub_attr = sub / "Attributes.txt"
+        if sub_attr.is_file():
+            attribute_files.append(sub_attr)
+
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for path in attribute_files:
+        try:
+            attrs = pd.read_csv(str(path), delimiter="|")
+        except Exception:
+            continue
+        if "Brand_Attribute" not in attrs.columns or "Attribute_Name" not in attrs.columns:
+            continue
+        flagged = attrs[
+            attrs["Brand_Attribute"].astype(str).str.strip().str.upper() == "Y"
+        ]
+        for raw_name in flagged["Attribute_Name"].dropna():
+            tool_name = str(raw_name).strip()
+            if not tool_name.upper().startswith("TOOL_"):
+                continue
+            brand_name = tool_name[len("TOOL_"):]
+            if not brand_name:
+                continue
+            key = (brand_name, tool_name)
+            if key not in seen:
+                seen.add(key)
+                pairs.append(key)
+    return pairs
+
+
+def scan_phase2_xlsx(xlsx_path: Path, brand_pairs: Optional[list] = None) -> Phase2Scan:
     """
     Inspect File_For_Mapping_QC.xlsx and return the autodetected
     column metadata.  Mirrors _load_cols_from_dir / _load_cols_from_bytes
     in the Streamlit page so the new UI can pre-fill the same defaults
     without the user typing column names by hand.
+
+    ``brand_pairs`` (from a sibling Attributes.txt walk) drives the
+    brand_values / tool_brand_values / detected_brand_pairs surfaces.
+    When None or empty, the scan falls back to reading literal "BRAND" /
+    "TOOL_BRAND" columns — preserving behaviour for loose-file uploads
+    where Attributes.txt isn't available.
 
     Raises ``InputError`` when the workbook has no FLAT_FILE sheet.
     """
@@ -172,6 +235,8 @@ def scan_phase2_xlsx(xlsx_path: Path) -> Phase2Scan:
         raw_cols[0] if raw_cols else "",
     )
 
+    col_upper_map = {str(c).upper(): c for c in df.columns}
+
     def _uniq(col: str) -> list[str]:
         if col in df.columns:
             return sorted(
@@ -179,7 +244,30 @@ def scan_phase2_xlsx(xlsx_path: Path) -> Phase2Scan:
             )
         return []
 
+    def _uniq_union(col_names: list[str]) -> list[str]:
+        merged: set[str] = set()
+        for name in col_names:
+            actual = col_upper_map.get(str(name).upper())
+            if actual is None:
+                continue
+            merged.update(_uniq(actual))
+        return sorted(merged)
+
     column_values = {col: _uniq(col) for col in all_cols}
+
+    # Brand / tool_brand values: pulled from every column the brand_pairs
+    # resolve to (multi-model projects can declare different bases per
+    # model — union the values so a single rules list works across all).
+    if brand_pairs:
+        brand_cols  = [b for b, _ in brand_pairs]
+        tool_cols   = [t for _, t in brand_pairs]
+        brand_vals  = _uniq_union(brand_cols)
+        tool_vals   = _uniq_union(tool_cols)
+        pair_dicts  = [{"brand_col": b, "tool_brand_col": t} for b, t in brand_pairs]
+    else:
+        brand_vals  = _uniq("BRAND")
+        tool_vals   = _uniq("TOOL_BRAND")
+        pair_dicts  = []
 
     return Phase2Scan(
         raw_upc_columns=raw_cols,
@@ -190,21 +278,26 @@ def scan_phase2_xlsx(xlsx_path: Path) -> Phase2Scan:
         default_manufacturer_col=default_mfr,
         default_parent_col=default_parent,
         manufacturer_values=_uniq(default_mfr),
-        brand_values=_uniq("BRAND"),
-        tool_brand_values=_uniq("TOOL_BRAND"),
+        brand_values=brand_vals,
+        tool_brand_values=tool_vals,
         column_values=column_values,
+        detected_brand_pairs=pair_dicts,
     )
 
 
 def scan_phase2_directory(root: Path) -> Phase2Scan:
     """
     Find File_For_Mapping_QC.xlsx anywhere under ``root`` and scan it.
-    Streamlit walks subdirectories because zips often have a wrapper.
+    Resolves brand pairs from sibling Attributes.txt files so the UI sees
+    the actual brand/tool_brand columns the project uses (handles clients
+    with custom brand attributes like SUB_BRAND, multi-model suffixed
+    columns like BRAND_MULO, etc.).
     """
     for p in sorted(root.rglob("*.xlsx")):
         if "file_for_mapping_qc" not in p.name.lower():
             continue
-        return scan_phase2_xlsx(p)
+        brand_pairs = _resolve_brand_pairs_from_dir(root)
+        return scan_phase2_xlsx(p, brand_pairs=brand_pairs)
     raise InputError(
         "File_For_Mapping_QC.xlsx not found in the ZIP — make sure your "
         "Phase 1 output is included.",

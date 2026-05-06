@@ -5,15 +5,14 @@ import type { BrandOverrideConfig, Phase2ScanResult, PrivateLabelRule } from "@/
 /**
  * Advanced Phase 2 configuration disclosure.
  *
- * Mirrors the two data editors on pages/2_Phase_3_Pipeline_and_QC.py:
- *   • Private Label Rules — per-retailer (walmart/cvs/heb) enable + label
- *   • Brand Override Rules — toggle + rules table + dependent column names
- *
- * All four pieces stay collapsed by default because the existing
- * walmart/cvs/heb defaults match the v1 production pipeline.  Most
- * analysts only touch the panel when running a custom retailer or a
- * manufacturer override — exposing the editors makes that possible
- * without a hand-edit of the JSON config.
+ * Two sections:
+ *   • Private Label Rules — per-retailer (walmart/cvs/heb) enable + label,
+ *     plus the Parent column that drives PL detection + the mismatch
+ *     dialog's PARENT header.
+ *   • Client Brand Rules — manufacturer + (BRAND, TOOL_BRAND) override
+ *     mapping table.  The brand pair itself is now resolved from each
+ *     Attributes.txt's Brand_Attribute=Y row, so the only column-picker
+ *     left is the manufacturer column.
  */
 
 export type PrivateLabelRules = Record<string, PrivateLabelRule>;
@@ -36,8 +35,6 @@ export function Phase2AdvancedConfig({
 
   privateLabelRules,
   setPrivateLabelRules,
-  plBaseName,
-  setPlBaseName,
 
   brandOverride,
   setBrandOverride,
@@ -51,8 +48,6 @@ export function Phase2AdvancedConfig({
 
   privateLabelRules: PrivateLabelRules;
   setPrivateLabelRules: (next: PrivateLabelRules) => void;
-  plBaseName: string;
-  setPlBaseName: (next: string) => void;
 
   brandOverride: BrandOverrideConfig;
   setBrandOverride: (next: BrandOverrideConfig) => void;
@@ -60,18 +55,16 @@ export function Phase2AdvancedConfig({
   brandOverrideRows: BrandOverrideRow[];
   setBrandOverrideRows: (next: BrandOverrideRow[]) => void;
 }) {
-  // Source the rule-editor dropdowns from whichever column the analyst
-  // picked in the column-name fields above.  Fall back to the static
-  // *_values fields the scan returns for the defaults so the dropdowns
-  // still have content when scan finishes before the user changes the
-  // column pickers.
+  // Manufacturer values track whichever column the analyst picked.  Brand /
+  // TOOL_BRAND values come from the scan's union across every column the
+  // Attributes.txt brand-pair resolver returned (handles SUB_BRAND clients
+  // and multi-model BRAND_MULO/BRAND_DRUG/etc. without analyst input).
   const colValues = scan?.column_values ?? {};
   const mfrValues =
     colValues[brandOverride.raw_manufacturer_col] ?? scan?.manufacturer_values ?? [];
-  const brandValues =
-    colValues[brandOverride.brand_col] ?? scan?.brand_values ?? [];
-  const toolBrandValues =
-    colValues[brandOverride.tool_brand_col] ?? scan?.tool_brand_values ?? [];
+  const brandValues = scan?.brand_values ?? [];
+  const toolBrandValues = scan?.tool_brand_values ?? [];
+  const detectedPairs = scan?.detected_brand_pairs ?? [];
 
   return (
     <details
@@ -136,28 +129,12 @@ export function Phase2AdvancedConfig({
             </tbody>
           </table>
 
-          <label className="block text-xs text-zinc-600">
-            <span className="block mb-1">Private-label target attribute (default: TOOL_BRAND)</span>
-            <ColumnSelect
-              value={plBaseName}
-              onChange={setPlBaseName}
-              options={scan?.all_columns ?? []}
-              emptyLabel="(blank = use TOOL_BRAND)"
-              fallbackPlaceholder="(blank = use TOOL_BRAND)"
-            />
-            <span className="block mt-1 text-[11px] text-zinc-500">
-              Leave blank for standard projects. Pick a different attribute (e.g. SUBBRAND)
-              for multi-model projects where PL retagging applies to TOOL_SUBBRAND_*
-              variants instead of TOOL_BRAND.
-            </span>
-          </label>
-
           {/* Parent column — drives PL retailer detection (Step 5) and the
               PARENT column rendered in the BRAND-vs-TOOL_BRAND mismatch
               dialog (Step 13).  Lives in the Private Label section because
               that's where its effect shows up; kept separate from the
-              brand-override rule editor's column pickers so swapping it
-              doesn't surprise the analyst into losing PL/CVS visibility. */}
+              brand-override rule editor so swapping it doesn't surprise
+              the analyst into losing PL/CVS visibility. */}
           <label className="block text-xs text-zinc-600">
             <span className="block mb-1">Parent column (PL detection + mismatch dialog)</span>
             {scan && scan.raw_parent_columns.length > 0 ? (
@@ -205,71 +182,68 @@ export function Phase2AdvancedConfig({
             </p>
           </div>
 
-          {/* Top column-pickers + bottom rule editor share the same 4-track
-              grid template (3 equal data columns + a fixed-width slot for
-              the row-delete button).  This makes the rule dropdowns line
-              up under the column-name selectors above pixel-for-pixel,
-              instead of drifting because of table auto-sizing. */}
-          <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1fr_2.5rem] gap-3">
-            <label className="block text-xs text-zinc-600">
-              <span className="block mb-1">Manufacturer column (override rules)</span>
-              {scan && scan.raw_manufacturer_columns.length > 0 ? (
-                <select
-                  value={brandOverride.raw_manufacturer_col}
-                  onChange={(e) =>
-                    setBrandOverride({ ...brandOverride, raw_manufacturer_col: e.target.value })
-                  }
-                  className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
-                >
-                  {scan.raw_manufacturer_columns.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  type="text"
-                  value={brandOverride.raw_manufacturer_col}
-                  onChange={(e) =>
-                    setBrandOverride({ ...brandOverride, raw_manufacturer_col: e.target.value })
-                  }
-                  className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
-                />
-              )}
-              <span className="block mt-1 text-[11px] text-zinc-500">
-                Used only to match each rule's manufacturer values — separate from the Parent column above.
-              </span>
-            </label>
-            <label className="block text-xs text-zinc-600">
-              <span className="block mb-1">BRAND column</span>
-              <ColumnSelect
-                value={brandOverride.brand_col}
-                onChange={(v) => setBrandOverride({ ...brandOverride, brand_col: v })}
-                options={scan?.all_columns ?? []}
-                fallbackPlaceholder="BRAND"
-              />
-            </label>
-            <label className="block text-xs text-zinc-600">
-              <span className="block mb-1">TOOL_BRAND column</span>
-              <ColumnSelect
-                value={brandOverride.tool_brand_col}
-                onChange={(v) => setBrandOverride({ ...brandOverride, tool_brand_col: v })}
-                options={scan?.all_columns ?? []}
-                fallbackPlaceholder="TOOL_BRAND"
-              />
-            </label>
-            {/* Empty cell aligning with the row-delete column below. */}
-            <div className="hidden md:block" />
-          </div>
+          {/* Detected brand pair(s) — sourced from each Attributes.txt's
+              Brand_Attribute=Y row.  Surfaces what the pipeline will use
+              for both PL retagging and override rules so analysts can
+              spot a misconfigured Attributes.txt before the run starts. */}
+          {detectedPairs.length > 0 && (
+            <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-900">
+              <span className="font-medium">Detected brand pair(s) from Attributes.txt:</span>{" "}
+              {detectedPairs
+                .map((p) => `${p.brand_col} / ${p.tool_brand_col}`)
+                .join("; ")}
+            </div>
+          )}
+          {scan && detectedPairs.length === 0 && (
+            <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+              No <code>Brand_Attribute=Y</code> row found in any Attributes.txt — falling back
+              to literal <code>BRAND</code> / <code>TOOL_BRAND</code> columns at run time.
+            </div>
+          )}
 
-          {/* Row-shaped rules editor — mirrors Streamlit's data_editor on
-              lines 1004-1033.  Each row maps to a single-element
-              BrandOverrideRule on submission.  Same grid template as the
-              column-pickers above so dropdowns align column-to-column. */}
+          {/* Manufacturer column — the only column-picker left in this
+              section.  BRAND and TOOL_BRAND columns are resolved from
+              Attributes.txt now (see status row above). */}
+          <label className="block text-xs text-zinc-600 max-w-md">
+            <span className="block mb-1">Manufacturer column (override rules)</span>
+            {scan && scan.raw_manufacturer_columns.length > 0 ? (
+              <select
+                value={brandOverride.raw_manufacturer_col}
+                onChange={(e) =>
+                  setBrandOverride({ ...brandOverride, raw_manufacturer_col: e.target.value })
+                }
+                className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
+              >
+                {scan.raw_manufacturer_columns.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                value={brandOverride.raw_manufacturer_col}
+                onChange={(e) =>
+                  setBrandOverride({ ...brandOverride, raw_manufacturer_col: e.target.value })
+                }
+                className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
+              />
+            )}
+            <span className="block mt-1 text-[11px] text-zinc-500">
+              Used only to match each rule's manufacturer values — separate from the Parent column above.
+            </span>
+          </label>
+
+          {/* Row-shaped rules editor — mirrors Streamlit's data_editor.
+              Each row maps to a single-element BrandOverrideRule on
+              submission.  3-column grid (manufacturer / from-BRAND /
+              to-TOOL_BRAND) plus a fixed-width row-delete slot. */}
           <div className="space-y-2">
-            {/* Empty grey separator — column labels were redundant with the
-                column-picker headers above and the placeholder text in
-                each rule field below. */}
-            <div className="bg-zinc-50 px-3 py-2 rounded" />
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1fr_2.5rem] gap-3 text-[11px] text-zinc-500 font-medium">
+              <div>Manufacturer value</div>
+              <div>From BRAND value</div>
+              <div>To TOOL_BRAND value</div>
+              <div />
+            </div>
 
             <div className="space-y-1.5">
               {brandOverrideRows.map((row, i) => (
@@ -349,7 +323,7 @@ export function Phase2AdvancedConfig({
             {toolBrandValues.length > 0 && (
               <details className="text-xs text-zinc-500">
                 <summary className="cursor-pointer">
-                  Reference: existing {brandOverride.tool_brand_col || "TOOL_BRAND"} values ({toolBrandValues.length})
+                  Reference: existing TOOL_BRAND values ({toolBrandValues.length})
                 </summary>
                 <div className="mt-1 max-h-32 overflow-y-auto font-mono">
                   {toolBrandValues.join(", ")}
@@ -360,54 +334,6 @@ export function Phase2AdvancedConfig({
         </section>
       </div>
     </details>
-  );
-}
-
-
-/**
- * Column-name picker.  Renders as a <select> populated from the scan's
- * column list when one is available, falling back to a free-text input
- * before the upload has been scanned.  Preserves any current value not
- * in the option list as a "(custom)" entry so configs from older runs
- * don't lose their column on first render.
- *
- * Used for the BRAND / TOOL_BRAND / PL base name fields.  Backs the
- * "reduce manual error" goal of the Phase 2 advanced config — analysts
- * pick from real columns rather than typing a name that risks a typo.
- */
-function ColumnSelect({
-  value, onChange, options,
-  emptyLabel = "(none)",
-  fallbackPlaceholder,
-}: {
-  value: string;
-  onChange: (next: string) => void;
-  options: string[];
-  emptyLabel?: string;
-  fallbackPlaceholder?: string;
-}) {
-  if (options.length === 0) {
-    return (
-      <input
-        type="text"
-        value={value}
-        placeholder={fallbackPlaceholder}
-        onChange={(e) => onChange(e.target.value)}
-        className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
-      />
-    );
-  }
-  const isCustom = value !== "" && !options.includes(value);
-  return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
-    >
-      <option value="">{emptyLabel}</option>
-      {isCustom && <option value={value}>{value} (custom)</option>}
-      {options.map((c) => <option key={c} value={c}>{c}</option>)}
-    </select>
   );
 }
 

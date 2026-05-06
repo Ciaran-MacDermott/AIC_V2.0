@@ -43,6 +43,21 @@ def _indent_block(text: str, indent: str = INDENT) -> str:
     return indent + str(text).replace("\n", "\n" + indent)
 
 
+def _log_brand_attribute_row(attrs_df: "pd.DataFrame", *, source: str) -> None:
+    """Print which Attribute_Name carries Brand_Attribute=Y for a parsed Attributes.txt."""
+    if "Brand_Attribute" not in attrs_df.columns or "Attribute_Name" not in attrs_df.columns:
+        print(f"{INDENT}{source}: no Brand_Attribute column — falling back to TOOL_*/base auto-discovery downstream")
+        return
+    flagged = attrs_df[
+        attrs_df["Brand_Attribute"].astype(str).str.strip().str.upper() == "Y"
+    ]
+    names = [str(n).strip() for n in flagged["Attribute_Name"].dropna() if str(n).strip()]
+    if not names:
+        print(f"{INDENT}{source}: no Brand_Attribute=Y row found")
+        return
+    print(f"{INDENT}{source}: brand attribute = {', '.join(names)}")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Duplicate Key Validation
 # ═══════════════════════════════════════════════════════════════════════════
@@ -617,7 +632,9 @@ def aic_code(
         attr_values_keys = [k for k in parsed_files if re.match(r"^AttributeValues\.txt$", k)]
 
         if attributes_keys and attr_values_keys:
-            all_attributes_dfs.append(parsed_files[attributes_keys[0]])
+            root_attrs_df = parsed_files[attributes_keys[0]]
+            _log_brand_attribute_row(root_attrs_df, source="root/Attributes.txt")
+            all_attributes_dfs.append(root_attrs_df)
             all_attr_values_dfs.append(parsed_files[attr_values_keys[0]])
             tool_sources.append("root")
 
@@ -632,7 +649,9 @@ def aic_code(
 
             if attr_path and attr_val_path:
                 try:
-                    all_attributes_dfs.append(pd.read_csv(attr_path, delimiter="|"))
+                    sub_attrs_df = pd.read_csv(attr_path, delimiter="|")
+                    _log_brand_attribute_row(sub_attrs_df, source=f"{entry_name}/Attributes.txt")
+                    all_attributes_dfs.append(sub_attrs_df)
                     all_attr_values_dfs.append(pd.read_csv(attr_val_path, delimiter="|"))
                     tool_sources.append(f"subdir:{entry_name}")
                 except Exception as exc:

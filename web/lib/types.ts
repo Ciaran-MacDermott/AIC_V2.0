@@ -115,8 +115,6 @@ export type BrandOverrideConfig = {
   enable: boolean;
   raw_manufacturer_col: string;
   raw_parent_col: string;
-  brand_col: string;
-  tool_brand_col: string;
   rules: { manufacturers: string[]; brand_overrides: Record<string, string> }[];
 };
 
@@ -126,7 +124,6 @@ export type Phase2Config = {
   brand_override_config: BrandOverrideConfig;
   is_custom_collapse: boolean;
   skip_rmrr: boolean;
-  pl_base_name: string;
 };
 
 export type MismatchGroup = {
@@ -175,8 +172,15 @@ export type Phase2ScanResult = {
   // rule editor now sources from `column_values` keyed on the active
   // column name so it tracks the user's column-name picks.
   manufacturer_values: string[];
+  // Brand / tool_brand values are the union across every column resolved
+  // from each Attributes.txt's Brand_Attribute=Y row.  Falls back to the
+  // literal "BRAND" / "TOOL_BRAND" columns when no Attributes.txt is
+  // available (loose-file uploads, legacy projects).
   brand_values: string[];
   tool_brand_values: string[];
+  // Literal (brand_col, tool_brand_col) pairs the scan resolved.  Empty
+  // when the project has no Attributes.txt or no Brand_Attribute column.
+  detected_brand_pairs?: { brand_col: string; tool_brand_col: string }[];
   column_values?: Record<string, string[]>;
 };
 

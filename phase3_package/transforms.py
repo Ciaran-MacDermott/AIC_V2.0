@@ -419,19 +419,21 @@ def apply_private_label_rules(
     tool_brand_col: str = "TOOL_BRAND",
     show_examples: bool = True,
     valid_model_suffixes: set = None,
-    pl_base_name: str = "",
+    brand_pairs: list = None,
 ) -> pd.DataFrame:
     """
     Tag private label rows with retailer-specific labels (e.g. PRIVATE LABEL RESTRICTED).
 
-    Applies rules to all TOOL_BRAND variants (base + model suffixes) by default.
+    Targeting:
 
-    When *pl_base_name* is set (e.g. "SUBBRAND"), rules are applied to ALL
-    ``TOOL_{pl_base_name}*`` columns directly — bypassing the model-suffix
-    whitelist.  Use this for multi-model projects where the PL attribute is
-    not TOOL_BRAND but e.g. TOOL_SUBBRAND_DRUG / TOOL_SUBBRAND_MULO / etc.,
-    including combined-model columns (e.g. TOOL_SUBBRAND_WT) that have no
-    matching subdirectory and would otherwise be missed.
+    - ``brand_pairs`` — list of ``(brand_col, tool_brand_col)`` tuples
+      resolved from each Attributes.txt's ``Brand_Attribute=Y`` row
+      (e.g. ``[("BRAND_FOOD", "TOOL_BRAND_FOOD"), ("BRAND_MULO",
+      "TOOL_BRAND_MULO")]``).  Labels are written into each tool column.
+    - Fallback when ``brand_pairs`` is empty / None: auto-detect all
+      ``TOOL_*``/base pairs from the DataFrame (respects
+      ``valid_model_suffixes``).  Used for legacy projects without a
+      ``Brand_Attribute`` column.
 
     pl_config example::
 
@@ -450,24 +452,22 @@ def apply_private_label_rules(
     raw_parent_col = col_upper_map[raw_parent_col.upper()]
 
     # Determine which TOOL_* columns to target
-    if pl_base_name:
-        # Explicit base name override: scan ALL TOOL_{base} and TOOL_{base}_* columns,
-        # regardless of valid_model_suffixes. This catches combined-model columns
-        # (e.g. TOOL_SUBBRAND_WT) that have no matching subdirectory.
-        base_upper = pl_base_name.strip().upper()
+    if brand_pairs:
+        # Use the (brand, tool_brand) pairs derived from Attributes.txt.
+        # The tool side is the literal target column; the model_suffix
+        # display label is parsed off the column name purely for logs.
         tool_brand_variants = []
-        for col_upper, col_actual in col_upper_map.items():
-            if col_upper == f"TOOL_{base_upper}":
-                tool_brand_variants.append((col_actual, ""))
-            elif col_upper.startswith(f"TOOL_{base_upper}_"):
-                suffix = col_upper[len(f"TOOL_{base_upper}_"):]
-                if suffix and f"{base_upper}_{suffix}" in col_upper_map:
-                    tool_brand_variants.append((col_actual, suffix))
+        for _, tool_col in brand_pairs:
+            tool_upper = str(tool_col).upper()
+            display_suffix = ""
+            if tool_upper.startswith("TOOL_"):
+                rest = tool_upper[len("TOOL_"):]
+                if "_" in rest:
+                    display_suffix = rest.split("_", 1)[1]
+            tool_brand_variants.append((tool_col, display_suffix))
         tool_brand_variants.sort(key=lambda x: (x[1], x[0]))
-        if not tool_brand_variants:
-            print(f"{INDENT}No TOOL_{base_upper}* columns found. No changes made.")
-            return df
-        print(f"{INDENT}PL column override: targeting TOOL_{base_upper}* columns")
+        print(f"{INDENT}Brand pairs (Attributes.txt Brand_Attribute=Y): "
+              + ", ".join(f"{b}/{t}" for b, t in brand_pairs))
     else:
         # Default: auto-detect all TOOL_*/base pairs (respects valid_model_suffixes)
         all_pairs = _find_all_tool_base_pairs(df, valid_suffixes=valid_model_suffixes)
@@ -591,6 +591,7 @@ def strip_legacy_brand_overrides(
     show_examples: bool = True,
     max_examples: int = 2,
     valid_model_suffixes: set = None,
+    brand_pairs: list = None,
 ) -> pd.DataFrame:
     """
     Reset TOOL_BRAND to BRAND for rows carrying a configured override value
@@ -612,8 +613,6 @@ def strip_legacy_brand_overrides(
         return df
 
     raw_manufacturer_col = config.get("raw_manufacturer_col", "RAW_MANUFACTURER")
-    brand_base = config.get("brand_col", "BRAND")
-    tool_base = config.get("tool_brand_col", "TOOL_BRAND")
 
     col_upper_map = {c.upper(): c for c in df.columns}
 
@@ -630,8 +629,13 @@ def strip_legacy_brand_overrides(
         print(f"{INDENT}Missing required column: [{raw_manufacturer_col}]. No cleanup made.")
         return df
 
-    # Find all BRAND / TOOL_BRAND column pairs (including multi-model)
-    brand_tool_pairs = _find_brand_tool_pairs(df, brand_base, tool_base, valid_suffixes=valid_model_suffixes)
+    # Resolve brand pairs.  Prefer the Attributes.txt-derived list (each item
+    # is a literal (brand_col, tool_brand_col) tuple); otherwise fall back to
+    # discovering pairs around the legacy BRAND / TOOL_BRAND defaults.
+    if brand_pairs:
+        brand_tool_pairs = [(b, t, "") for b, t in brand_pairs]
+    else:
+        brand_tool_pairs = _find_brand_tool_pairs(df, "BRAND", "TOOL_BRAND", valid_suffixes=valid_model_suffixes)
     if not brand_tool_pairs:
         print(f"{INDENT}Missing BRAND / TOOL_BRAND columns. No cleanup made.")
         return df
@@ -725,11 +729,16 @@ def apply_brand_overrides(
     show_examples: bool = True,
     max_examples: int = 5,
     valid_model_suffixes: set = None,
+    brand_pairs: list = None,
 ) -> pd.DataFrame:
     """
     Replace TOOL_BRAND values based on manufacturer + brand override rules.
 
-    Supports multi-model variants (e.g. BRAND_MULO / TOOL_BRAND_MULO).
+    When ``brand_pairs`` is provided (resolved from each Attributes.txt's
+    Brand_Attribute=Y row), rules iterate over those literal pairs.
+    Otherwise falls back to discovering ``BRAND``/``TOOL_BRAND``-shaped
+    variants from the DataFrame (legacy projects without Brand_Attribute).
+
     Matching is case-insensitive and whitespace-tolerant.
     """
     _print_step_header("11", "Client Brand Mapping Overrides")
@@ -739,8 +748,6 @@ def apply_brand_overrides(
         return df
 
     raw_manufacturer_col = config.get("raw_manufacturer_col", "RAW_MANUFACTURER")
-    brand_base = config.get("brand_col", "BRAND")
-    tool_base = config.get("tool_brand_col", "TOOL_BRAND")
 
     col_upper_map = {c.upper(): c for c in df.columns}
 
@@ -757,12 +764,16 @@ def apply_brand_overrides(
         print(f"{INDENT}Missing required column: [{raw_manufacturer_col}]. No changes made.")
         return df
 
-    # Find all BRAND / TOOL_BRAND column pairs
-    brand_tool_pairs = _find_brand_tool_pairs(df, brand_base, tool_base, valid_suffixes=valid_model_suffixes)
+    # Resolve brand pairs.  Prefer the Attributes.txt-derived list; otherwise
+    # fall back to discovering BRAND / TOOL_BRAND-shaped variants in the df.
+    if brand_pairs:
+        brand_tool_pairs = [(b, t, "") for b, t in brand_pairs]
+    else:
+        brand_tool_pairs = _find_brand_tool_pairs(df, "BRAND", "TOOL_BRAND", valid_suffixes=valid_model_suffixes)
     if not brand_tool_pairs:
         print(
             f"{INDENT}Missing BRAND / TOOL_BRAND columns for overrides. "
-            f"Expected '{brand_base}' / '{tool_base}' or suffixed variants. No changes made."
+            f"No Brand_Attribute=Y row resolved and no BRAND/TOOL_BRAND-shaped pairs found. No changes made."
         )
         return df
 

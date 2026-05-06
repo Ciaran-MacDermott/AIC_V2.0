@@ -67,6 +67,75 @@ INDENT = "   "
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Brand-pair resolution (Attributes.txt Brand_Attribute=Y)
+# ═══════════════════════════════════════════════════════════════════════════
+# Each Attributes.txt declares its model's brand attribute via a row where
+# Brand_Attribute=Y; the Attribute_Name on that row is the literal TOOL_*
+# column name (e.g. TOOL_BRAND_FOOD, TOOL_BRAND_MULO, TOOL_SUB_BRAND_DRUG).
+# Stripping the TOOL_ prefix yields the BRAND-side column.  This means PL
+# retagging and brand-override rules don't need a user-supplied
+# brand_col / tool_brand_col / pl_base_name — the data is self-describing.
+
+def _log_brand_attribute_row(attrs_df: "pd.DataFrame", *, source: str) -> None:
+    """Print which Attribute_Name the brand-attribute flag points at."""
+    if "Brand_Attribute" not in attrs_df.columns or "Attribute_Name" not in attrs_df.columns:
+        print(f"{INDENT}{source}: no Brand_Attribute column — falling back to TOOL_*/base auto-discovery downstream")
+        return
+    flagged = attrs_df[
+        attrs_df["Brand_Attribute"].astype(str).str.strip().str.upper() == "Y"
+    ]
+    names = [str(n).strip() for n in flagged["Attribute_Name"].dropna() if str(n).strip()]
+    if not names:
+        print(f"{INDENT}{source}: no Brand_Attribute=Y row found")
+        return
+    print(f"{INDENT}{source}: brand attribute = {', '.join(names)}")
+
+
+def _resolve_brand_pairs(
+    combined_attributes_df: Optional["pd.DataFrame"],
+    df_columns: List[str],
+) -> List[tuple]:
+    """
+    Build the list of (brand_col, tool_brand_col) pairs from Brand_Attribute=Y
+    rows.  Pairs whose columns aren't present in ``df_columns`` are dropped
+    with a warning so downstream loops don't KeyError on stale Attributes.txt.
+    """
+    if combined_attributes_df is None:
+        return []
+    if "Brand_Attribute" not in combined_attributes_df.columns:
+        return []
+    if "Attribute_Name" not in combined_attributes_df.columns:
+        return []
+
+    flagged = combined_attributes_df[
+        combined_attributes_df["Brand_Attribute"].astype(str).str.strip().str.upper() == "Y"
+    ]
+    col_upper_map = {str(c).upper(): c for c in df_columns}
+
+    pairs: List[tuple] = []
+    seen: set = set()
+    for raw_name in flagged["Attribute_Name"].dropna():
+        tool_name = str(raw_name).strip().upper()
+        if not tool_name.startswith("TOOL_"):
+            print(f"{INDENT}⚠ Brand_Attribute=Y row has Attribute_Name={raw_name!r}; expected TOOL_-prefixed name — skipping")
+            continue
+        brand_name = tool_name[len("TOOL_"):]
+        if not brand_name:
+            continue
+        tool_actual = col_upper_map.get(tool_name)
+        brand_actual = col_upper_map.get(brand_name)
+        if tool_actual is None or brand_actual is None:
+            print(f"{INDENT}⚠ Brand_Attribute=Y declares {tool_name} but its column pair isn't in the data — skipping")
+            continue
+        key = (brand_actual, tool_actual)
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append(key)
+    return pairs
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Main Pipeline
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -78,7 +147,6 @@ def run_through_step_12(
     is_custom_collapse: bool,
     file_manifest: Dict[str, Any] = None,
     skip_rmrr: bool = False,
-    pl_base_name: str = "",
 ) -> tuple:
     """
     Run Steps 1-12 plus mismatch detection (Phase A).
@@ -248,13 +316,24 @@ def run_through_step_12(
     # honored end-to-end (detection + dialog).  Falls back to the function
     # default ("RAW_PARENT") when not configured.
     raw_parent_col = brand_override_config.get("raw_parent_col", "RAW_PARENT") or "RAW_PARENT"
+
+    # Resolve (brand_col, tool_brand_col) pairs from each Attributes.txt's
+    # Brand_Attribute=Y row.  Each row's Attribute_Name is the literal TOOL
+    # column (e.g. TOOL_BRAND_FOOD); stripping TOOL_ gives the BRAND column.
+    # Empty list when Brand_Attribute is absent / all-N — downstream falls
+    # back to TOOL_*/base auto-discovery.
+    brand_pairs = _resolve_brand_pairs(combined_attributes_df, list(df.columns))
+    if brand_pairs:
+        pair_summary = ", ".join(f"{b}/{t}" for b, t in brand_pairs)
+        print(f"{INDENT}Resolved brand pairs from Attributes.txt: {pair_summary}")
+
     df = apply_private_label_rules(
         df,
         private_label_config,
         raw_parent_col=raw_parent_col,
         show_examples=True,
         valid_model_suffixes=valid_model_suffixes,
-        pl_base_name=pl_base_name,
+        brand_pairs=brand_pairs or None,
     )
 
     # Step 6: Check UPC10/SKU/ITEM_DIM_KEY for scientific notation / decimals
@@ -276,10 +355,20 @@ def run_through_step_12(
     df = strip_legacy_restricted_suffix(df, valid_model_suffixes=valid_model_suffixes)
 
     # Step 10.6: Strip stale brand overrides for non-configured manufacturers
-    df = strip_legacy_brand_overrides(df, brand_override_config, valid_model_suffixes=valid_model_suffixes)
+    df = strip_legacy_brand_overrides(
+        df,
+        brand_override_config,
+        valid_model_suffixes=valid_model_suffixes,
+        brand_pairs=brand_pairs or None,
+    )
 
     # Step 11: Apply client brand mapping overrides
-    df = apply_brand_overrides(df, brand_override_config, valid_model_suffixes=valid_model_suffixes)
+    df = apply_brand_overrides(
+        df,
+        brand_override_config,
+        valid_model_suffixes=valid_model_suffixes,
+        brand_pairs=brand_pairs or None,
+    )
 
     # Step 12: Canonicalize TOOL_BRAND with _RESTRICTED where RAW_MULTI signals it
     # Skipped for non-MULO+ geo groupings where RMRR tagging does not apply
@@ -627,6 +716,7 @@ def _scan_directory(input_dir: Path) -> Dict[str, Any]:
             try:
                 root_attributes_df = pd.read_csv(str(entry), delimiter="|")
                 root_has_attributes = True
+                _log_brand_attribute_row(root_attributes_df, source="root/Attributes.txt")
             except Exception as exc:
                 print(f"{INDENT}  ⚠ Skipped {name}: could not parse ({type(exc).__name__})")
                 skipped_files.append(name)
@@ -688,7 +778,9 @@ def _scan_directory(input_dir: Path) -> Dict[str, Any]:
 
         if attr_entry and attr_val_entry:
             try:
-                all_attributes_dfs.append(pd.read_csv(str(attr_entry), delimiter="|"))
+                sub_attrs_df = pd.read_csv(str(attr_entry), delimiter="|")
+                _log_brand_attribute_row(sub_attrs_df, source=f"{subdir.name}/Attributes.txt")
+                all_attributes_dfs.append(sub_attrs_df)
                 all_attr_values_dfs.append(pd.read_csv(str(attr_val_entry), delimiter="|"))
                 tool_sources.append(f"subdir:{subdir.name}")
             except Exception as exc:

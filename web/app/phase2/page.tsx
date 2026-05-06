@@ -35,12 +35,12 @@ function defaultBrandOverride(): BrandOverrideConfig {
   return {
     // Always-on: brand override rules are part of every Phase 2 run now.
     // An empty rules list is a no-op for the pipeline so this is safe even
-    // when the analyst doesn't add any overrides.
+    // when the analyst doesn't add any overrides.  brand_col / tool_brand_col
+    // are no longer in the schema — the pipeline resolves them from each
+    // Attributes.txt's Brand_Attribute=Y row at run time.
     enable: true,
     raw_manufacturer_col: "RAW_MANUFACTURER",
     raw_parent_col: "RAW_PARENT",
-    brand_col: "BRAND",
-    tool_brand_col: "TOOL_BRAND",
     rules: [],
   };
 }
@@ -72,7 +72,6 @@ function Phase2Page() {
 
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
   const [plRules, setPlRules] = useState<PrivateLabelRules>(defaultPlRules);
-  const [plBaseName, setPlBaseName] = useState("");
   const [brandOverride, setBrandOverride] = useState<BrandOverrideConfig>(defaultBrandOverride);
   // Always start with one empty row so the editor is primed and the
   // dropdowns are visible — analysts run override rules every project.
@@ -254,7 +253,6 @@ function Phase2Page() {
       brand_override_config: { ...brandOverride, enable: true, rules },
       is_custom_collapse:    customCollapse,
       skip_rmrr:             skipRmrr,
-      pl_base_name:          plBaseName,
     };
   }
 
@@ -382,6 +380,32 @@ function Phase2Page() {
               onPick={setZipFile}
             />
           )}
+
+          {/* Scan summary — shows what the backend resolved from each
+              Attributes.txt as soon as the scan completes.  Surfaces the
+              brand pair(s) at the page level (not just inside the
+              collapsed advanced panel) so analysts can confirm the
+              project shape before kicking off a run. */}
+          {scan && scan.detected_brand_pairs && scan.detected_brand_pairs.length > 0 && (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 px-4 py-3 text-xs text-emerald-900 fade-in-up">
+              <div className="font-medium mb-1">
+                Detected {scan.detected_brand_pairs.length} brand pair{scan.detected_brand_pairs.length === 1 ? "" : "s"} from Attributes.txt
+              </div>
+              <div className="font-mono">
+                {scan.detected_brand_pairs
+                  .map((p) => `${p.brand_col} / ${p.tool_brand_col}`)
+                  .join("  •  ")}
+              </div>
+            </div>
+          )}
+          {scan && (!scan.detected_brand_pairs || scan.detected_brand_pairs.length === 0) && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-xs text-amber-900 fade-in-up">
+              No <code>Brand_Attribute=Y</code> row found in any Attributes.txt — the run will fall back
+              to literal <code>BRAND</code> / <code>TOOL_BRAND</code> columns.  Confirm this is expected
+              before running.
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <label className="rounded-xl border border-zinc-200 bg-white p-3 text-sm">
               <div className="font-medium text-zinc-700 mb-1">
@@ -432,8 +456,6 @@ function Phase2Page() {
             scan={scan}
             privateLabelRules={plRules}
             setPrivateLabelRules={setPlRules}
-            plBaseName={plBaseName}
-            setPlBaseName={setPlBaseName}
             brandOverride={brandOverride}
             setBrandOverride={setBrandOverride}
             brandOverrideRows={brandOverrideRows}

@@ -140,9 +140,10 @@ class BrandOverrideConfig(BaseModel):
     # need to surface retailer values (e.g. "CVS PHARMACY") in the dialog
     # don't break manufacturer-side cleanup by changing one shared field.
     raw_parent_col:       str  = "RAW_PARENT"
-    brand_col:            str  = "BRAND"
-    tool_brand_col:       str  = "TOOL_BRAND"
     rules:                list[BrandOverrideRule] = []
+    # Note: brand_col / tool_brand_col were dropped — the brand pair is
+    # resolved per-model at runtime from each Attributes.txt's
+    # Brand_Attribute=Y row (see phase3_package.pipeline._resolve_brand_pairs).
 
 
 class Phase2Config(BaseModel):
@@ -159,7 +160,6 @@ class Phase2Config(BaseModel):
     brand_override_config: BrandOverrideConfig = BrandOverrideConfig()
     is_custom_collapse:    bool = False
     skip_rmrr:             bool = False
-    pl_base_name:          str  = ""
 
 
 class MismatchRow(BaseModel):
@@ -227,8 +227,18 @@ class Phase2ScanResult(BaseModel):
     default_manufacturer_col:  str
     default_parent_col:        str
     manufacturer_values:       list[str]
+    # Distinct values across every brand / tool_brand column resolved from
+    # each Attributes.txt's Brand_Attribute=Y row (handles single-model
+    # projects that only have BRAND/TOOL_BRAND, multi-model projects that
+    # have BRAND_MULO/TOOL_BRAND_MULO/etc., and clients whose brand
+    # attribute is SUB_BRAND or some other custom name).  Empty list when
+    # the project has no Brand_Attribute column (legacy data).
     brand_values:              list[str]
     tool_brand_values:         list[str]
+    # The literal column-name pairs the scan resolved.  Surfaced so the UI
+    # can show analysts which brand pair(s) were detected without having
+    # to ask them to type column names.
+    detected_brand_pairs:      list[dict[str, str]] = []
     # Per-column distinct values so the brand-override rule editor can
     # source its dropdowns from whichever column the analyst picked in
     # the column-name fields, not just the defaults.
