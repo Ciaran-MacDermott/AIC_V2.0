@@ -402,6 +402,95 @@ def run_through_step_12(
     return df, duplicate_dimkeys_df, mismatch_groups, pipeline_context
 
 
+def _apply_mismatch_corrections(
+    df: pd.DataFrame,
+    corrections: List[Dict[str, Any]],
+    parent_col_actual: Optional[str] = None,
+) -> Dict[str, int]:
+    """Apply analyst corrections from the mismatch wizard to ``df`` in place.
+
+    The wizard ships one correction per edited field (BRAND or TOOL_BRAND),
+    so a row where both fields were changed produces two correction objects
+    sharing the same ``(brand, tool_brand_old, parent)`` key. Applying them
+    one at a time would mutate BRAND first, leaving the second mask
+    (still keyed on the *original* BRAND value) matching zero rows — the
+    TOOL_BRAND change would silently disappear.
+
+    Group by ``(brand_col, tool_brand_col, brand, tool_brand_old, parent)``
+    so both writes for a given row apply under one mask computed against
+    the original values. A single dropped column doesn't kill the batch:
+    the offending key is logged and the rest still apply.
+    """
+    summary = {
+        "brand_count":  0,
+        "tool_count":   0,
+        "rows_updated": 0,
+        "n_pairs":      0,
+        "skipped":      0,
+    }
+    if not corrections:
+        return summary
+
+    col_upper_map = {str(c).upper(): c for c in df.columns}
+
+    grouped: Dict[tuple, Dict[str, str]] = {}
+    for fix in corrections:
+        key = (
+            fix.get("brand_col", "BRAND"),
+            fix.get("tool_brand_col", "TOOL_BRAND"),
+            fix.get("brand", ""),
+            fix.get("tool_brand_old", ""),
+            fix.get("parent", ""),
+        )
+        bucket = grouped.setdefault(key, {})
+        if fix.get("type") == "brand":
+            bucket["brand_new"] = fix.get("brand_new", "")
+        elif fix.get("type") == "tool_brand":
+            bucket["tool_brand_new"] = fix.get("tool_brand_new", "")
+
+    for (brand_col, tool_col, brand_old, tb_old, parent_val), edits in grouped.items():
+        actual_brand_col = col_upper_map.get(brand_col.upper(), brand_col)
+        actual_tool_col  = col_upper_map.get(tool_col.upper(),  tool_col)
+        if actual_brand_col not in df.columns or actual_tool_col not in df.columns:
+            print(
+                f"{INDENT}⚠ Skipping correction for "
+                f"({brand_old!r}, {tb_old!r}): column "
+                f"{brand_col if actual_brand_col not in df.columns else tool_col!r} "
+                f"not in df."
+            )
+            summary["skipped"] += 1
+            continue
+
+        try:
+            mask = (
+                (df[actual_brand_col].astype(str).str.upper() == brand_old.upper())
+                & (df[actual_tool_col].astype(str).str.upper() == tb_old.upper())
+            )
+            if parent_val and parent_col_actual and parent_col_actual in df.columns:
+                mask = mask & (
+                    df[parent_col_actual].astype(str).str.upper() == parent_val.upper()
+                )
+
+            n_rows = int(mask.sum())
+            summary["rows_updated"] += n_rows
+            summary["n_pairs"]      += 1
+
+            if "brand_new" in edits:
+                df.loc[mask, actual_brand_col] = edits["brand_new"]
+                summary["brand_count"] += 1
+            if "tool_brand_new" in edits:
+                df.loc[mask, actual_tool_col] = edits["tool_brand_new"]
+                summary["tool_count"] += 1
+        except Exception as exc:
+            print(
+                f"{INDENT}⚠ Skipping correction for "
+                f"({brand_old!r}, {tb_old!r}): {type(exc).__name__}: {exc}"
+            )
+            summary["skipped"] += 1
+
+    return summary
+
+
 def run_from_step_14(
     df: pd.DataFrame,
     pipeline_context: Dict[str, Any],
@@ -450,47 +539,16 @@ def run_from_step_14(
         parent_col_actual = col_upper_map.get(raw_manufacturer_col.upper())
 
     if corrections:
-        brand_count = 0
-        tool_count = 0
-        rows_updated = 0
-        corrected_pairs: set = set()
-        for fix in corrections:
-            brand_col_name = fix.get("brand_col", "BRAND")
-            tool_col_name = fix.get("tool_brand_col", "TOOL_BRAND")
-
-            # Row mask: match on original BRAND + TOOL_BRAND values
-            mask = (
-                (df[brand_col_name].astype(str).str.upper() == fix["brand"].upper())
-                & (df[tool_col_name].astype(str).str.upper() == fix["tool_brand_old"].upper())
-            )
-
-            # Narrow by parent value when available (AO brand rows).  The
-            # column resolved above matches whatever the dialog rendered
-            # under the PARENT header, so analyst-supplied parent values
-            # land on the right rows even after the parent/manufacturer split.
-            parent_val = fix.get("parent", "")
-            if parent_val and parent_col_actual:
-                mask = mask & (df[parent_col_actual].astype(str).str.upper() == parent_val.upper())
-
-            n_rows = int(mask.sum())
-            rows_updated += n_rows
-            corrected_pairs.add((fix["brand"], fix["tool_brand_old"]))
-
-            if fix.get("type") == "brand":
-                df.loc[mask, brand_col_name] = fix["brand_new"]
-                brand_count += 1
-            else:
-                df.loc[mask, tool_col_name] = fix["tool_brand_new"]
-                tool_count += 1
-
+        summary = _apply_mismatch_corrections(df, corrections, parent_col_actual)
         parts = []
-        if brand_count:
-            parts.append(f"{brand_count} BRAND")
-        if tool_count:
-            parts.append(f"{tool_count} TOOL_BRAND")
-        n_pairs = len(corrected_pairs)
-        print(f"{INDENT}Mismatch review: {' + '.join(parts)} correction(s) manually applied "
-              f"— {n_pairs} distinct pair(s), {rows_updated} row(s) updated")
+        if summary["brand_count"]:
+            parts.append(f"{summary['brand_count']} BRAND")
+        if summary["tool_count"]:
+            parts.append(f"{summary['tool_count']} TOOL_BRAND")
+        if summary["skipped"]:
+            parts.append(f"{summary['skipped']} skipped (column drift)")
+        print(f"{INDENT}Mismatch review: {' + '.join(parts) or 'no changes'} applied "
+              f"— {summary['n_pairs']} distinct pair(s), {summary['rows_updated']} row(s) updated")
 
 
     # Step 14: SKU collapse (top-dollar or custom parent dim-key)

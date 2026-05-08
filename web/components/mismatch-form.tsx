@@ -198,7 +198,14 @@ export function MismatchForm({
                 <th className="px-3 py-1.5 text-left whitespace-nowrap">{group.parent_col}</th>
               )}
               {hasDescription && <th className="px-3 py-2 text-left whitespace-nowrap">DESCRIPTION</th>}
-              {hasRmrr        && <th className="px-2 py-2 text-left whitespace-nowrap w-12">RMRR</th>}
+              {hasRmrr        && (
+                <th
+                  className="px-2 py-2 text-left whitespace-nowrap w-12 cursor-help"
+                  title="Multi-retailer restricted — flagged from RAW_MULTI_RETAILER_RESTRICTED"
+                >
+                  RMRR
+                </th>
+              )}
               <th className="px-3 py-1.5 text-left whitespace-nowrap">BRAND</th>
               <th className="px-3 py-1.5 text-left whitespace-nowrap">TOOL_BRAND</th>
             </tr>
@@ -230,7 +237,10 @@ export function MismatchForm({
                   {hasRmrr && (
                     <td className="px-2 py-1.5 whitespace-nowrap text-[11px] w-12">
                       {row.RMRR === "RES" ? (
-                        <span className="rounded bg-amber-100 text-amber-800 px-1.5 py-0.5">
+                        <span
+                          className="rounded bg-amber-100 text-amber-800 px-1.5 py-0.5 cursor-help"
+                          title="This SKU is flagged as multi-retailer restricted — TOOL_BRAND should carry the 'RESTRICTED' suffix"
+                        >
                           RES
                         </span>
                       ) : ""}
@@ -240,10 +250,13 @@ export function MismatchForm({
                     <select
                       value={d.brand_new}
                       onChange={(e) => setDecision(ri, { brand_new: e.target.value })}
+                      title={isExpected
+                        ? "Row matches an expected pattern (PRIVATE LABEL / RESTRICTED / EXCLUDE) — typically lower priority. Edit to override the auto-classification (e.g. legacy cleanup)."
+                        : "Pick the corrected BRAND for this row."}
                       className="border border-zinc-300 rounded px-2 py-1 text-[11px] w-full min-w-[12rem]"
                     >
                       {brandOptions.map((v) => (
-                        <option key={v} value={v}>{v || "—"}</option>
+                        <option key={v} value={v}>{v || "(clear)"}</option>
                       ))}
                     </select>
                   </td>
@@ -251,10 +264,13 @@ export function MismatchForm({
                     <select
                       value={d.tool_brand_new}
                       onChange={(e) => setDecision(ri, { tool_brand_new: e.target.value })}
+                      title={isExpected
+                        ? "Row matches an expected pattern (PRIVATE LABEL / RESTRICTED / EXCLUDE). Edit to override (e.g. clean up a stale RESTRICTED suffix from a past run)."
+                        : "Pick the corrected TOOL_BRAND for this row."}
                       className="border border-zinc-300 rounded px-2 py-1 text-[11px] w-full min-w-[12rem]"
                     >
                       {toolBrandOptions.map((v) => (
-                        <option key={v} value={v}>{v || "—"}</option>
+                        <option key={v} value={v}>{v || "(clear)"}</option>
                       ))}
                     </select>
                   </td>

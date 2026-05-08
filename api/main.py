@@ -329,30 +329,39 @@ def qc_finalize(run_id: str) -> QcFinalized:
 
     jobs.set_state(record, state="finalizing", stage_label="Writing QC workbook…")
 
-    # Heavy frames live on disk between qc_ready and finalize so they
-    # don't pin parent memory during the analyst's review.  Single
-    # pickle.load here (~10–50 ms typical) and we have everything.
-    from api.pipeline import Phase1Payload
-    with open(record.pipeline_payload["_heavy_path"], "rb") as f:
-        heavy = pickle.load(f)
-    payload = Phase1Payload(
-        FINAL=heavy["FINAL"],
-        FLAT_FILE_OUT=heavy["FLAT_FILE_OUT"],
-        meta=heavy["meta"],
-        dictEnsemble=record.pipeline_payload["dictEnsemble"],
-    )
-
-    edited_dfs: dict = {}
-    for sheet_key, edits in record.qc_edits.items():
-        if not edits:
-            continue
-        edited_dfs[sheet_key] = qc_view.apply_edits_to_dataframe(
-            sheet_key, payload.dictEnsemble[sheet_key], edits,
+    # qc_finalize runs in the FastAPI threadpool of the parent process —
+    # not in a subprocess like Phase 1 / Phase 2 pipeline runs.  The
+    # heavy-frame load + xlsxwriter buffers can each consume hundreds of
+    # MB; with 5 analysts hitting "Finalize" in the same minute (end-of-
+    # day load profile) the parent BFF can OOM.  Acquire a RUN_SLOT so
+    # concurrent finalizes serialize through the same semaphore as
+    # pipeline runs — analysts past the 5-slot cap see "Waiting for a
+    # free run slot…" instead of an OOM crash that takes the BFF down.
+    with worker._run_slot(record):
+        # Heavy frames live on disk between qc_ready and finalize so they
+        # don't pin parent memory during the analyst's review.  Single
+        # pickle.load here (~10–50 ms typical) and we have everything.
+        from api.pipeline import Phase1Payload
+        with open(record.pipeline_payload["_heavy_path"], "rb") as f:
+            heavy = pickle.load(f)
+        payload = Phase1Payload(
+            FINAL=heavy["FINAL"],
+            FLAT_FILE_OUT=heavy["FLAT_FILE_OUT"],
+            meta=heavy["meta"],
+            dictEnsemble=record.pipeline_payload["dictEnsemble"],
         )
 
-    out_path = record.tmpdir / "File_For_Mapping_QC.xlsx"
-    write_qc_excel(str(out_path), payload, edited_dfs)
-    record.output_path = out_path
+        edited_dfs: dict = {}
+        for sheet_key, edits in record.qc_edits.items():
+            if not edits:
+                continue
+            edited_dfs[sheet_key] = qc_view.apply_edits_to_dataframe(
+                sheet_key, payload.dictEnsemble[sheet_key], edits,
+            )
+
+        out_path = record.tmpdir / "File_For_Mapping_QC.xlsx"
+        write_qc_excel(str(out_path), payload, edited_dfs)
+        record.output_path = out_path
 
     jobs.set_state(
         record, state="done", progress=1.0, stage_label="✓ Complete",
@@ -730,13 +739,20 @@ def resolve_mismatch(run_id: str, payload: MismatchResolve) -> Phase2Done:
     record = jobs.registry.get(run_id)
     if record is None:
         raise HTTPException(404, "Run not found")
-    if record.state != "mismatch_pending":
-        raise HTTPException(
-            409, f"Run is in state '{record.state}', no mismatch review pending",
-        )
 
+    # Atomic state-flip-and-write: do the state guard, write the
+    # corrections, and flip state to "running" inside one locked block so
+    # a second concurrent submit (network retry, double-click, two tabs)
+    # sees state != "mismatch_pending" and 409s deterministically instead
+    # of silently overwriting the first request's corrections.
     with record.lock:
+        if record.state != "mismatch_pending":
+            raise HTTPException(
+                409, f"Run is in state '{record.state}', no mismatch review pending",
+            )
         record.mismatch_corrections = [c.model_dump() for c in payload.corrections]
+        record.state = "running"
+        record.last_touched = time.time()
     record.resume_event.set()
 
     return Phase2Done(download_url=f"/api/runs/{run_id}/artifacts/output.xlsx")

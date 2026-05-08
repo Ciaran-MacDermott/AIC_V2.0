@@ -55,6 +55,14 @@ function QcWizardPage() {
   const pendingEdits = useRef<Map<string, string>>(new Map());
   const saveTimer = useRef<number | null>(null);
 
+  // Save state — surfaced near the grid so analysts editing at the bottom
+  // of a long sheet see save activity and failures without scrolling up.
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  // Mirror pendingEdits.current.size into render state so the indicator
+  // updates as analysts type.  Refs alone don't trigger re-renders.
+  const [pendingCount, setPendingCount] = useState(0);
+
   // ── Initial load: list of sheets ───────────────────────────────────────
   useEffect(() => {
     if (!runId) return;
@@ -87,6 +95,8 @@ function QcWizardPage() {
     const key = sheetList[step].key;
     let cancelled = false;
     pendingEdits.current.clear();
+    setPendingCount(0);
+    setSaveError(null);
     api.qcSheet(runId, key)
       .then((res) => {
         if (cancelled) return;
@@ -96,31 +106,45 @@ function QcWizardPage() {
     return () => { cancelled = true; };
   }, [runId, sheetList, step]);
 
-  const flushEdits = useCallback(async () => {
+  // Returns true on success, false on failure — callers that gate sheet
+  // navigation use the return value to keep the analyst on the current
+  // sheet so unsaved edits aren't silently lost.
+  const flushEdits = useCallback(async (): Promise<boolean> => {
     if (saveTimer.current) {
       window.clearTimeout(saveTimer.current);
       saveTimer.current = null;
     }
-    if (!payload || pendingEdits.current.size === 0) return;
+    if (!payload || pendingEdits.current.size === 0) return true;
     const editedRows = [...pendingEdits.current.entries()].map(
       ([row_id, attribute_value]) => ({ row_id, attribute_value }),
     );
-    pendingEdits.current.clear();
+    setSaving(true);
+    setSaveError(null);
     try {
       await api.qcSave(runId, payload.key, { edited_rows: editedRows });
+      pendingEdits.current.clear();
+      setPendingCount(0);
+      return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setSaveError(msg);
+      // Keep edits in the buffer so a retry-on-next can recover.
+      return false;
+    } finally {
+      setSaving(false);
     }
   }, [payload, runId]);
 
   function onEdit(rowId: string, value: string) {
     pendingEdits.current.set(rowId, value);
+    setPendingCount(pendingEdits.current.size);
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(flushEdits, SAVE_DEBOUNCE_MS);
   }
 
   async function next() {
-    await flushEdits();
+    const ok = await flushEdits();
+    if (!ok) return;  // stay on this sheet so the analyst can retry / fix
     if (!sheetList) return;
     if (step + 1 < sheetList.length) {
       setStep(step + 1);
@@ -130,9 +154,26 @@ function QcWizardPage() {
   }
 
   async function skip() {
-    await flushEdits();
+    const ok = await flushEdits();
+    if (!ok) return;
     await finalize();
   }
+
+  // Browser-level guardrail: warn if the analyst tries to refresh, close
+  // the tab, or navigate away while edits are unsaved (debounce window not
+  // yet flushed, or a save failed and the buffer still holds edits).
+  useEffect(() => {
+    function handler(e: BeforeUnloadEvent): string | undefined {
+      if (pendingCount > 0 || saving) {
+        e.preventDefault();
+        e.returnValue = "";  // required by spec — modern browsers show their own message
+        return "";
+      }
+      return undefined;
+    }
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [pendingCount, saving]);
 
   async function finalize() {
     setFinalising(true);
@@ -274,6 +315,47 @@ function QcWizardPage() {
               />
             </div>
           </div>
+
+          {/* Dirty-state strip — sticky-ish placement above the grid so
+              analysts editing the bottom of a long sheet still notice
+              save activity, transient failures, or unsaved buffer. */}
+          {(saving || pendingCount > 0 || saveError) && (
+            <div
+              className={`mb-2 flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs ${
+                saveError
+                  ? "border-red-200 bg-red-50 text-red-800"
+                  : saving
+                    ? "border-brand-200 bg-brand-50 text-brand-800"
+                    : "border-amber-200 bg-amber-50 text-amber-900"
+              }`}
+              role="status"
+              aria-live="polite"
+            >
+              {saving ? (
+                <>
+                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-brand-300 border-t-brand-700" />
+                  <span>Saving {pendingCount} edit{pendingCount === 1 ? "" : "s"}…</span>
+                </>
+              ) : saveError ? (
+                <>
+                  <span aria-hidden>⚠</span>
+                  <span>Save failed: {saveError}.</span>
+                  <button
+                    type="button"
+                    onClick={() => flushEdits()}
+                    className="ml-auto underline hover:no-underline"
+                  >
+                    Retry
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
+                  <span>{pendingCount} unsaved edit{pendingCount === 1 ? "" : "s"} (saving in ~{SAVE_DEBOUNCE_MS / 1000}s).</span>
+                </>
+              )}
+            </div>
+          )}
 
           {payload ? (
             <QcGrid payload={payload} onEdit={onEdit} />

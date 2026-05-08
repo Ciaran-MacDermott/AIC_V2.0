@@ -557,25 +557,38 @@ def collect_dropdown_values(
     pages/2_Phase_3_Pipeline_and_QC.py) so the analyst sees every brand
     that exists in the data — not just the mismatched subset.  When the
     df is unavailable we fall back to the values present in the groups.
+
+    Multi-model runs surface one group per (BRAND_X, TOOL_BRAND_X) pair
+    and the wire payload carries a single shared dropdown list reused
+    across all groups.  Read every group's column pair so suffixed-only
+    values (e.g. an "AO CLOROX RESTRICTED" written into TOOL_BRAND_TGT
+    by step 12 but absent from groups[0]'s column) appear as selectable
+    options — otherwise the React <select> falls back to the empty
+    option for those rows.
     """
     if main_df is not None and len(groups) > 0:
         col_upper = {str(c).upper(): c for c in main_df.columns}
-        b_col  = col_upper.get(groups[0]["brand_col"].upper(),      groups[0]["brand_col"])
-        tb_col = col_upper.get(groups[0]["tool_brand_col"].upper(), groups[0]["tool_brand_col"])
-        if b_col in main_df.columns and tb_col in main_df.columns:
-            brand_values = sorted(
-                main_df[b_col].dropna().astype(str).str.strip()
-                .loc[lambda s: (s != "") & (s.str.lower() != "nan")].unique().tolist()
-            )
-            tb_values = sorted(
-                main_df[tb_col].dropna().astype(str).str.strip()
-                .loc[lambda s: (s != "") & (s.str.lower() != "nan")].unique().tolist()
-            )
-            return brand_values, tb_values
+        brand_set: set[str] = set()
+        tb_set:    set[str] = set()
+        for grp in groups:
+            b_col  = col_upper.get(grp["brand_col"].upper(),      grp["brand_col"])
+            tb_col = col_upper.get(grp["tool_brand_col"].upper(), grp["tool_brand_col"])
+            if b_col in main_df.columns:
+                brand_set.update(
+                    main_df[b_col].dropna().astype(str).str.strip()
+                    .loc[lambda s: (s != "") & (s.str.lower() != "nan")].unique().tolist()
+                )
+            if tb_col in main_df.columns:
+                tb_set.update(
+                    main_df[tb_col].dropna().astype(str).str.strip()
+                    .loc[lambda s: (s != "") & (s.str.lower() != "nan")].unique().tolist()
+                )
+        if brand_set or tb_set:
+            return sorted(brand_set), sorted(tb_set)
 
     # Fallback: union the values found in the mismatch frames themselves.
-    brand_set: set[str] = set()
-    tb_set: set[str] = set()
+    brand_set = set()
+    tb_set = set()
     for g in groups:
         df = g["mismatch_df"]
         for v in df["BRAND"].astype(str):

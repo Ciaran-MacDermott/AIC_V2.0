@@ -235,6 +235,26 @@ function Phase2Page() {
     };
   }, [postQcRunId]);
 
+  // Browser-level guardrail: if the wizard is open (groups loaded) the
+  // analyst has either started reviewing or has accumulated edits across
+  // groups.  Refresh / close-tab / browser-back drops all of that state
+  // because corrections live only in MismatchForm's local React state
+  // until the analyst submits the last group.  Warn before unload so the
+  // analyst can confirm rather than lose silently.
+  //
+  // Only attached while groups !== null — when the wizard isn't open the
+  // page is safe to navigate away from.
+  useEffect(() => {
+    if (groups === null) return undefined;
+    function handler(e: BeforeUnloadEvent): string | undefined {
+      e.preventDefault();
+      e.returnValue = "";  // required by spec for the browser-native prompt
+      return "";
+    }
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [groups]);
+
   function buildConfig(): Phase2Config {
     // Convert the row-shaped rules editor (Streamlit's UX) into the
     // BrandOverrideRule[] phase3_package.transforms.apply_brand_overrides
@@ -409,7 +429,7 @@ function Phase2Page() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <label className="rounded-xl border border-zinc-200 bg-white p-3 text-sm">
               <div className="font-medium text-zinc-700 mb-1">
-                RAW UPC10 column
+                Private-label detection col
                 {scanning && <span className="text-xs text-zinc-400 ml-2">scanning…</span>}
               </div>
               {scan && scan.raw_upc_columns.length > 0 ? (

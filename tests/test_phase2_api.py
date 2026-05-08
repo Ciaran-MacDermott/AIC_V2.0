@@ -368,6 +368,55 @@ def test_resolve_409_when_not_paused(client: TestClient, tmp_path: Path) -> None
     assert r.status_code == 409
 
 
+def test_resolve_double_submit_second_request_409s(
+    client: TestClient, tmp_path: Path,
+) -> None:
+    """
+    Two near-simultaneous resolve POSTs (network retry, double-click,
+    tab duplication): the first must apply its corrections, the second
+    must 409 deterministically rather than silently overwriting them.
+
+    Regression for the race where the state guard ran outside the lock
+    so both requests passed through and the second clobbered the first.
+    """
+    d = tmp_path / "p2"
+    d.mkdir()
+    record = jobs.registry.create(phase="phase2", tmpdir=d)
+    jobs.set_state(record, state="mismatch_pending")
+
+    first = client.post(
+        f"/api/runs/{record.run_id}/mismatch/resolve",
+        json={"corrections": [
+            {"type": "tool_brand", "brand": "AO BRANDS",
+             "tool_brand_old": "AO CLOROX RESTRICTED",
+             "tool_brand_new": "AO CLOROX",
+             "brand_col": "BRAND_TGT", "tool_brand_col": "TOOL_BRAND_TGT"},
+        ]},
+    )
+    assert first.status_code == 200
+
+    # State must have flipped to "running" inside the locked block of the
+    # first call — second request sees that and 409s.
+    assert record.state == "running"
+
+    second = client.post(
+        f"/api/runs/{record.run_id}/mismatch/resolve",
+        json={"corrections": [
+            {"type": "tool_brand", "brand": "AO BRANDS",
+             "tool_brand_old": "AO CLOROX RESTRICTED",
+             "tool_brand_new": "DIFFERENT VALUE",
+             "brand_col": "BRAND_TGT", "tool_brand_col": "TOOL_BRAND_TGT"},
+        ]},
+    )
+    assert second.status_code == 409
+
+    # First request's corrections survive intact; second's payload is
+    # not on the record.
+    saved = record.mismatch_corrections
+    assert len(saved) == 1
+    assert saved[0]["tool_brand_new"] == "AO CLOROX"
+
+
 def test_phase2_zip_extraction_unwraps_single_top_folder(tmp_path: Path) -> None:
     """Direct unit test for extract_input_zip — covers the wrapper-folder case."""
     from api.pipeline_phase2 import extract_input_zip

@@ -179,6 +179,61 @@ def test_collect_dropdown_values_pulls_unique_brands_from_main_df() -> None:
     assert tb_values    == ["ACME", "OMEGA RESTRICTED", "ZETA"]
 
 
+def test_collect_dropdown_values_unions_across_all_groups() -> None:
+    """
+    Multi-model runs produce one mismatch group per (BRAND, TOOL_BRAND)
+    column pair.  Each pair's column may carry values that don't appear
+    in groups[0]'s column — most commonly the canonical "X RESTRICTED"
+    values that step 12 (raw_multi_restricted_overrides) writes into a
+    suffixed TOOL_BRAND_* column when the row's RAW_MULTI flag is set.
+
+    The dropdown payload powers the wizard's <select> for ALL groups,
+    so values from any group's column must be in the unioned options.
+    Otherwise the React <select> silently falls back to its empty
+    option (rendering as "—") for any row whose value is missing from
+    the dropdown — exactly the bug analysts see in the UI.
+    """
+    main_df = pd.DataFrame([
+        {"BRAND_FOOD": "ACME",  "TOOL_BRAND_FOOD": "ACME",
+         "BRAND_TGT":  "ACME",  "TOOL_BRAND_TGT":  "ACME"},
+        {"BRAND_FOOD": "OMEGA", "TOOL_BRAND_FOOD": "OMEGA",
+         "BRAND_TGT":  "OMEGA", "TOOL_BRAND_TGT":  "AO CLOROX RESTRICTED"},
+        {"BRAND_FOOD": "ZETA",  "TOOL_BRAND_FOOD": "ZETA",
+         "BRAND_TGT":  "ZETA",  "TOOL_BRAND_TGT":  "ZETA"},
+    ])
+
+    food_grp = {
+        "model_suffix":   "FOOD",
+        "brand_col":      "BRAND_FOOD",
+        "tool_brand_col": "TOOL_BRAND_FOOD",
+        "parent_col":     None,
+        "mismatch_df":    pd.DataFrame([{"BRAND": "ACME", "TOOL_BRAND": "ACMI"}]),
+    }
+    tgt_grp = {
+        "model_suffix":   "TGT",
+        "brand_col":      "BRAND_TGT",
+        "tool_brand_col": "TOOL_BRAND_TGT",
+        "parent_col":     None,
+        "mismatch_df":    pd.DataFrame(
+            [{"BRAND": "OMEGA", "TOOL_BRAND": "AO CLOROX RESTRICTED"}]
+        ),
+    }
+
+    brand_values, tb_values = collect_dropdown_values(
+        [food_grp, tgt_grp], main_df=main_df,
+    )
+
+    # Every legitimate value from BOTH columns must be present.
+    assert "ACME" in tb_values
+    assert "AO CLOROX RESTRICTED" in tb_values, (
+        "TOOL_BRAND_TGT-only value missing — collect_dropdown_values is "
+        f"reading only groups[0]'s column. Got: {tb_values}"
+    )
+    # Brands too — ACME and OMEGA both present in main_df.
+    assert "ACME" in brand_values
+    assert "OMEGA" in brand_values
+
+
 def test_collect_dropdown_values_falls_back_to_groups_when_no_main_df() -> None:
     grp = _grp([
         {"BRAND": "ACME", "TOOL_BRAND": "ACMI"},
