@@ -396,7 +396,10 @@ function RuleField({
         onChange={(e) => onChange(e.target.value === "__CUSTOM__" ? value : e.target.value)}
         className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
       >
-        <option value="">{placeholder}</option>
+        {/* disabled + hidden: shows the placeholder when value is empty but
+            keeps "old BRAND value" / "new TOOL_BRAND value" / "manufacturer
+            value" out of the open dropdown so analysts can't pick them. */}
+        <option value="" disabled hidden>{placeholder}</option>
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
         {isCustom && <option value="__CUSTOM__">(custom: {value})</option>}
       </select>

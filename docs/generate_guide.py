@@ -367,7 +367,7 @@ p(
 )
 bullet("Download output.xlsx — the Cleaned Output workbook")
 bullet("Edit it externally and re-upload via 'Post-QC: edit & re-upload' to trigger a re-collapse + per-category CSV split")
-bullet("Download the resulting AIC_Phase2_3_exports.zip")
+bullet("Download the resulting aic_phase3_exports.zip")
 bullet("Download the run bundle — same audit trail as Phase 1, plus mismatch corrections")
 
 # ── Understanding the data files ─────────────────────────────────────────────

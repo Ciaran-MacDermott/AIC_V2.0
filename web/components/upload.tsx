@@ -127,10 +127,10 @@ function ValidationBadge({ state }: { state: ValidationState }) {
   if (state.ok) {
     return (
       <span
-        className="inline-flex items-center gap-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 text-[11px]"
+        className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 text-xs"
         title="File looks correct"
       >
-        <svg viewBox="0 0 12 12" className="h-3 w-3 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg viewBox="0 0 12 12" className="h-3.5 w-3.5 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M2.5 6.5 L5 9 L9.5 3.5" />
         </svg>
         file(s) ok
@@ -139,10 +139,10 @@ function ValidationBadge({ state }: { state: ValidationState }) {
   }
   return (
     <span
-      className="inline-flex items-center gap-1 rounded-full bg-red-50 text-red-700 border border-red-200 px-2 py-0.5 text-[11px] max-w-[16rem] truncate"
+      className="inline-flex items-center gap-1.5 rounded-full bg-red-50 text-red-700 border border-red-200 px-2.5 py-1 text-xs max-w-[16rem] truncate"
       title={state.reason}
     >
-      <svg viewBox="0 0 12 12" className="h-3 w-3 fill-none stroke-current" strokeWidth="2" strokeLinecap="round">
+      <svg viewBox="0 0 12 12" className="h-3.5 w-3.5 fill-none stroke-current" strokeWidth="2" strokeLinecap="round">
         <path d="M3 3 L9 9 M9 3 L3 9" />
       </svg>
       {state.reason}

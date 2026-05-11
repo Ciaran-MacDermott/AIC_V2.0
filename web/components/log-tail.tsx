@@ -109,7 +109,7 @@ export function LogTail({ lines }: { lines: string[] }) {
       )}
       <div
         ref={ref}
-        className="rounded-md border border-zinc-200 bg-zinc-50 px-4 py-3 font-mono text-xs leading-relaxed max-h-[420px] overflow-y-auto whitespace-pre-wrap"
+        className="rounded-md border border-zinc-200 bg-zinc-50 px-4 py-3 font-mono text-xs leading-relaxed h-[420px] min-h-[200px] max-h-[80vh] overflow-auto resize-y whitespace-pre-wrap"
       >
         {lines.length === 0 ? (
           <span className="text-zinc-400">Waiting for output…</span>

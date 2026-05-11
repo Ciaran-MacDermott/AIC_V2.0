@@ -3,7 +3,6 @@
 // Pipeline progress card — stage label, elapsed time, queue chip (while
 // queued), download-log link, and a state-coloured progress bar.
 
-import { api } from "@/lib/api";
 import type { JobStatus } from "@/lib/types";
 
 function fmtElapsed(s: number): string {
@@ -20,7 +19,7 @@ function fmtEta(s: number): string {
 
 export function ProgressPanel({ status }: { status: JobStatus }) {
   const {
-    state, progress, stage_label, elapsed_s, log_cursor, run_id,
+    state, progress, stage_label, elapsed_s,
     queue_position, queue_depth, eta_seconds,
   } = status;
   const isError = state === "error";
@@ -49,21 +48,7 @@ export function ProgressPanel({ status }: { status: JobStatus }) {
 
       <div className="flex items-center justify-between mb-3 gap-3">
         <span className="text-sm font-medium text-zinc-700">{stage_label || "Starting…"}</span>
-        <div className="flex items-center gap-3">
-          {/* Log download — useful at any state since the buffer fills in
-              real time.  The route exists from day one (api/main.py); this
-              is just a button. */}
-          {log_cursor > 0 && (
-            <a
-              href={api.downloadUrl(`/api/runs/${run_id}/artifacts/log.txt`)}
-              className="text-xs text-zinc-500 hover:text-zinc-700 underline"
-              title="Download full pipeline log"
-            >
-              Download log
-            </a>
-          )}
-          <span className="text-xs text-zinc-500 tabular-nums">{fmtElapsed(elapsed_s)}</span>
-        </div>
+        <span className="text-xs text-zinc-500 tabular-nums">{fmtElapsed(elapsed_s)}</span>
       </div>
 
       {isError ? (

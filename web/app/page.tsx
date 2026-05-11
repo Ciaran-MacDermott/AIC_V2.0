@@ -256,7 +256,7 @@ function Phase1Page() {
                     : "bg-emerald-500"
                   }`} />
                   <span>
-                    Pipeline output
+                    Pipeline QC output
                     <span className="text-zinc-400"> · </span>
                     <span className="tabular-nums">{status.log_cursor}</span> log lines
                   </span>

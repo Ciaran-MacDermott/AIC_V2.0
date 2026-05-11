@@ -399,7 +399,7 @@ function Phase2Page() {
           <>
             Run Phase 2 (attribute assembly) → Phase 3 (quality checks) on a zipped project. Resolve any BRAND vs TOOL_BRAND mismatches when prompted, then QC the cleaned workbook and re-upload to export per-category CSVs.
             <span className="block mt-2 text-[14px] text-zinc-500">
-              Tip: keep the run log open alongside the workbook during Excel QC — it flags warnings and pipeline notes worth a second look on unusual rows.
+              Tip: keep the run log open alongside the workbook during Excel QC — it flags warnings and pipeline notes.
             </span>
           </>
         }
@@ -539,7 +539,10 @@ function Phase2Page() {
           {status.state === "error" && (
             <RunErrorDialog status={status} onRetry={onReset} />
           )}
-          <StageStepper state={status.state} />
+          {/* Prefer postQcStatus when the analyst has kicked off Finalise &
+              Export — that's where steps 4 + 5 live. Falls back to the main
+              run's state for steps 1-3. */}
+          <StageStepper state={postQcStatus?.state ?? status.state} />
           <ProgressPanel status={status} />
 
           {isPaused && groups && (
@@ -573,7 +576,7 @@ function Phase2Page() {
                     href={api.downloadUrl(`/api/runs/${runId}/artifacts/log.txt`)}
                     className="btn-secondary inline-flex items-center"
                   >
-                    Download run log (.txt)
+                    Download QC log
                   </a>
                 )}
               </div>
@@ -584,6 +587,45 @@ function Phase2Page() {
                 usually what to scrutinise (or correct) before re-uploading below.
               </p>
             </div>
+          )}
+
+          {/* Pipeline output — moved above the post-QC re-upload section so
+              the natural sequence is: download workbook → inspect log here
+              or in the downloaded txt → re-upload below. Same disclosure
+              pattern as the Phase 1 page; dot picks up the run's state. */}
+          {status.log_cursor > 0 && runId && (
+            <details
+              open={logsOpen}
+              onToggle={(e) => setLogsOpen((e.target as HTMLDetailsElement).open)}
+              className="group surface-card-quiet mb-4 px-4 py-2 text-xs text-zinc-600"
+            >
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 select-none">
+                <span className="flex items-center gap-2">
+                  <span className={`inline-block h-1.5 w-1.5 rounded-full ${
+                    isError ? "bg-err"
+                    : isStopped ? "bg-zinc-400"
+                    : isPaused ? "bg-amber-500"
+                    : isRunning ? "bg-brand-500"
+                    : "bg-emerald-500"
+                  }`} />
+                  <span>
+                    Pipeline QC output
+                    <span className="text-zinc-400"> · </span>
+                    <span className="tabular-nums">{status.log_cursor}</span> log lines
+                  </span>
+                </span>
+                <span className="text-zinc-400 group-open:hidden">Show ▾</span>
+                <span className="text-zinc-400 hidden group-open:inline">Hide ▴</span>
+              </summary>
+              {/* Mount-on-open: FullLogTail fetches the whole buffer, not
+                  just the live 60-line tail in the status response.  This
+                  is what the analyst needs for QC of the cleaned output. */}
+              <div className="mt-3">
+                {logsOpen && (
+                  <FullLogTail runId={runId} active={isRunning || isPaused} />
+                )}
+              </div>
+            </details>
           )}
 
           {/* Post-QC re-upload: edit Cleaned Output in Excel, re-upload here,
@@ -607,13 +649,24 @@ function Phase2Page() {
                 type="button"
                 disabled={!postQcFile || postQcSubmitting || !!postQcRunId}
                 onClick={onPostQcUpload}
-                className="btn-success"
+                className="btn-success inline-flex items-center gap-2"
               >
-                {postQcSubmitting
-                  ? "Uploading…"
-                  : postQcRunId
-                    ? (postQcStatus?.stage_label ?? "Processing…")
-                    : "Finalise & Export"}
+                {/* Spinner appears once the POST is in flight or the worker
+                    has started — gives visual proof the click registered
+                    even when the stage_label hasn't updated yet. */}
+                {(postQcSubmitting || postQcRunId) && (
+                  <span
+                    aria-hidden
+                    className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white"
+                  />
+                )}
+                <span>
+                  {postQcSubmitting
+                    ? "Uploading…"
+                    : postQcRunId
+                      ? (postQcStatus?.stage_label ?? "Processing…")
+                      : "Finalise & Export"}
+                </span>
               </button>
               {postQcStatus && postQcStatus.state === "error" && (
                 <div className="text-xs text-red-700">
@@ -644,48 +697,11 @@ function Phase2Page() {
                 onClick={finishAndReset}
                 className="btn-primary inline-flex items-center"
               >
-                Download AIC_Phase2_3_exports.zip
+                Download aic_phase3_exports.zip
               </a>
             </div>
           )}
 
-          {/* Logs collapsed by default — same disclosure pattern as the
-              Phase 1 page so the run UI stays focused on stage + progress.
-              The dot in the summary picks up the run's current state. */}
-          {status.log_cursor > 0 && runId && (
-            <details
-              open={logsOpen}
-              onToggle={(e) => setLogsOpen((e.target as HTMLDetailsElement).open)}
-              className="group surface-card-quiet mt-3 px-4 py-2 text-xs text-zinc-600"
-            >
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 select-none">
-                <span className="flex items-center gap-2">
-                  <span className={`inline-block h-1.5 w-1.5 rounded-full ${
-                    isError ? "bg-err"
-                    : isStopped ? "bg-zinc-400"
-                    : isPaused ? "bg-amber-500"
-                    : isRunning ? "bg-brand-500"
-                    : "bg-emerald-500"
-                  }`} />
-                  <span>
-                    Pipeline output
-                    <span className="text-zinc-400"> · </span>
-                    <span className="tabular-nums">{status.log_cursor}</span> log lines
-                  </span>
-                </span>
-                <span className="text-zinc-400 group-open:hidden">Show ▾</span>
-                <span className="text-zinc-400 hidden group-open:inline">Hide ▴</span>
-              </summary>
-              {/* Mount-on-open: FullLogTail fetches the whole buffer, not
-                  just the live 60-line tail in the status response.  This
-                  is what the analyst needs for QC of the cleaned output. */}
-              <div className="mt-3">
-                {logsOpen && (
-                  <FullLogTail runId={runId} active={isRunning || isPaused} />
-                )}
-              </div>
-            </details>
-          )}
           <div className="mt-4 flex items-center gap-2">
             {isRunning && (
               <button

@@ -839,7 +839,7 @@ def download_post_qc(run_id: str) -> FileResponse:
     return FileResponse(
         path=str(record.post_qc_zip_path),
         media_type="application/zip",
-        filename="AIC_Phase2_3_exports.zip",
+        filename="aic_phase3_exports.zip",
     )
 
 
