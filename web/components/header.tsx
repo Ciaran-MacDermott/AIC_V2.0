@@ -2,6 +2,7 @@
 
 // App header — kit's AppBar + PageHeader; NavTabs is the only AIC-specific bit.
 
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { AppBar, PageHeader, Wordmark } from "@/kit";
@@ -39,11 +40,11 @@ function NavTabs({ pathname }: { pathname: string }) {
 
 export function Header({
   title    = "Attribute Mapping",
-  subtitle = "Lookup → BM25 → XGBoost ensemble. Review your QC sheets, finalise, export.",
+  subtitle = "Review your QC sheets, finalise, export.",
   eyebrow,
 }: {
   title?:    string;
-  subtitle?: string;
+  subtitle?: ReactNode;
   eyebrow?:  string;
 }) {
   const pathname = usePathname() ?? "/";

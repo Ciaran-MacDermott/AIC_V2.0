@@ -144,7 +144,14 @@ function Phase1Page() {
       <Header
         eyebrow="Phase 1"
         title="Attribute Mapping"
-        subtitle={"Upload a labelled Excel (META + FINAL) and a new-product CSV.\nThe pipeline runs lookup → BM25 → XGBoost ensemble, then surfaces each attribute's lookup sheet for QC review."}
+        subtitle={
+          <>
+            Upload an Excel with FINAL and META sheets and a new-product CSV — or a zip with those plus all tool files (recommended) to run all phases.
+            <span className="block mt-2 text-[14px] text-zinc-500">
+              Suggestions powered by lookups + ML; review and finalise one QC sheet per attribute.
+            </span>
+          </>
+        }
       />
       <main className="mx-auto max-w-5xl px-6 pb-12">
 
