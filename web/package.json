@@ -4,9 +4,7 @@
   "scripts": {
     "kit:sync": "bash ../../kit/sync.sh ../",
     "dev": "next dev",
-    "predev": "npm run kit:sync",
     "build": "next build",
-    "prebuild": "npm run kit:sync",
     "start": "next start",
     "typecheck": "tsc --noEmit"
   },
