@@ -351,10 +351,16 @@ def _log_phase2_inputs(record: JobRecord, directory_path: str) -> None:
     """
     Confirm Phase 2 inputs before the pipeline starts.
 
-    Happy path collapses to a single line so the run log stays focused on
-    the pipeline output that follows.  If a required file is missing, fall
-    back to the full file/subdir layout so a 'ModelInfo.txt not found'
-    failure can be diagnosed against the actual disk state.
+    Two valid layouts:
+      * Single-model — all required files at the project root.
+      * Multi-model — File_For_Mapping_QC.xlsx at root, plus one
+        ``Tool_files_*`` subdir per model containing ModelInfo.txt,
+        Attributes.txt, AttributeValues.txt. The phase3_package merges
+        these subdirs into a single frame at runtime.
+
+    Happy paths collapse to a single line; a genuinely missing file
+    triggers the full layout dump so a 'ModelInfo.txt not found' failure
+    can be diagnosed against the actual disk state.
     """
     p = Path(directory_path)
     if not p.is_dir():
@@ -364,7 +370,15 @@ def _log_phase2_inputs(record: JobRecord, directory_path: str) -> None:
     items = sorted(p.iterdir(), key=lambda x: x.name)
     files   = [i.name for i in items if i.is_file()]
     subdirs = [i.name for i in items if i.is_dir()]
-    missing = [f for f in _PHASE2_REQUIRED if not (p / f).is_file()]
+
+    # Multi-model layout: required files live one level down in Tool_files_*
+    # subdirs. Count a file as present if it's at root OR in any direct subdir.
+    def _present(name: str) -> bool:
+        if (p / name).is_file():
+            return True
+        return any((p / sub / name).is_file() for sub in subdirs)
+
+    missing = [f for f in _PHASE2_REQUIRED if not _present(f)]
 
     if missing:
         append_log(record, f"Project directory: {p}")
@@ -376,13 +390,21 @@ def _log_phase2_inputs(record: JobRecord, directory_path: str) -> None:
             except OSError:
                 inner = []
             append_log(record, f"  {sub}/: {', '.join(inner) if inner else '(empty)'}")
-        append_log(record, f"⚠ Required files missing at root: {', '.join(missing)}")
+        append_log(record, f"⚠ Required files missing: {', '.join(missing)}")
         return
 
-    append_log(
-        record,
-        f"✓ Phase 2 inputs ready ({len(files)} file{'s' if len(files) != 1 else ''} at root)",
-    )
+    model_subdirs = [s for s in subdirs if s.lower().startswith("tool_files_")]
+    if model_subdirs:
+        append_log(
+            record,
+            f"✓ Phase 2 inputs ready (multi-model: {len(model_subdirs)} model subdir"
+            f"{'s' if len(model_subdirs) != 1 else ''})",
+        )
+    else:
+        append_log(
+            record,
+            f"✓ Phase 2 inputs ready ({len(files)} file{'s' if len(files) != 1 else ''} at root)",
+        )
 
 
 def run_phase2_worker(record: JobRecord, directory_path: str,
