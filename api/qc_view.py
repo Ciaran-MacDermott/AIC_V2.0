@@ -53,6 +53,20 @@ def attribute_from_sheet_key(sheet_key: str) -> str:
     return sheet_key.replace("Final_", "").replace("_lkp", "")
 
 
+_NOTE_SHORT_FORMS = {
+    # Upstream ml_package writes long-form notes aimed at fresh readers.
+    # The QC grid analysts see them every run, so swap to terse versions
+    # here rather than fork ml_package (which is vendored from upstream).
+    "Numeric/range attribute — ML not applied. "
+    "Range values (e.g. \"16 OZ\", \"22-24 CT\") carry no text signal "
+    "a classifier can use. Lookup suggestion is the correct source.":
+        "Numeric/range — ML skipped; use the Lookup suggestion.",
+    "Fixed-list attribute (analyst-flagged) — "
+    "no label match found. Verify the Lookup suggestion manually.":
+        "Fixed-list attribute — no label match; verify the Lookup suggestion.",
+}
+
+
 def _prepare_display_df(df: pd.DataFrame, attr: str) -> pd.DataFrame:
     df = sort_lookup_df(df)
     if "ML Method" in df.columns:
@@ -63,6 +77,8 @@ def _prepare_display_df(df: pd.DataFrame, attr: str) -> pd.DataFrame:
     df = df.fillna("")
     obj_cols = df.select_dtypes(include="object").columns
     df[obj_cols] = df[obj_cols].replace("nan", "")
+    if "Note" in df.columns:
+        df["Note"] = df["Note"].replace(_NOTE_SHORT_FORMS)
     return df.reset_index(drop=True)
 
 

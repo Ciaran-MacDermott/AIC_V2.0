@@ -133,26 +133,24 @@ class Phase2Scan:
 
 def _resolve_brand_pairs_from_dir(root: Path) -> list[tuple[str, str]]:
     """
-    Walk ``root`` for every Attributes.txt and collect (brand_col, tool_brand_col)
-    pairs from Brand_Attribute=Y rows. Empty list when no Attributes.txt is
-    present or no Brand_Attribute column exists — callers fall back to literal
-    BRAND / TOOL_BRAND columns in that case.
+    Walk ``root`` recursively for every Attributes.txt and collect
+    (brand_col, tool_brand_col) pairs from Brand_Attribute=Y rows. Empty
+    list when no Attributes.txt is present or no Brand_Attribute column
+    exists — callers fall back to literal BRAND / TOOL_BRAND columns in
+    that case.
+
+    Recursive walk handles nested layouts (project/Tool_files/Sub/Attributes.txt)
+    in addition to flat (root/Attributes.txt) and 1-level-deep
+    (root/Tool_files_X/Attributes.txt) ones.
     """
     try:
         import pandas as pd  # local
     except ImportError:
         return []
 
-    attribute_files: list[Path] = []
-    root_attr = root / "Attributes.txt"
-    if root_attr.is_file():
-        attribute_files.append(root_attr)
-    for sub in sorted(root.iterdir()) if root.is_dir() else []:
-        if not sub.is_dir():
-            continue
-        sub_attr = sub / "Attributes.txt"
-        if sub_attr.is_file():
-            attribute_files.append(sub_attr)
+    if not root.is_dir():
+        return []
+    attribute_files = sorted(root.rglob("Attributes.txt"))
 
     pairs: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
