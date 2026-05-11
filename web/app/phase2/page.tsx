@@ -1,5 +1,10 @@
 "use client";
 
+// Phase 2/3 page — zip upload (or handoff from Phase 1 via ?parentRunId=…)
+// → scan → run → optional BRAND/TOOL_BRAND mismatch review → cleaned-output
+// download → post-QC re-upload as a standalone run. Two independent poll
+// loops: runId (Phase 2) and postQcRunId (post-QC).
+
 import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -31,13 +36,11 @@ function defaultPlRules(): PrivateLabelRules {
   };
 }
 
+// Brand-override rules are submitted every run; empty rules is a pipeline
+// no-op. brand_col/tool_brand_col aren't in the schema — pipeline resolves
+// them from Attributes.txt at run time.
 function defaultBrandOverride(): BrandOverrideConfig {
   return {
-    // Always-on: brand override rules are part of every Phase 2 run now.
-    // An empty rules list is a no-op for the pipeline so this is safe even
-    // when the analyst doesn't add any overrides.  brand_col / tool_brand_col
-    // are no longer in the schema — the pipeline resolves them from each
-    // Attributes.txt's Brand_Attribute=Y row at run time.
     enable: true,
     raw_manufacturer_col: "RAW_MANUFACTURER",
     raw_parent_col: "RAW_PARENT",
@@ -46,7 +49,12 @@ function defaultBrandOverride(): BrandOverrideConfig {
 }
 
 const POLL_MS = 700;
+// Terminal-for-this-page states. mismatch_pending isn't here because it
+// blocks the worker on resume_event, which the wizard resolves below.
 const TERMINAL = new Set(["done", "error", "stopped"]);
+// Workflow-end teardown delay — gives the browser headroom for cold first
+// byte on the final download before the run is removed server-side.
+const RESET_DELAY_MS = 6000;
 
 
 export default function Phase2PageWrapper() {
@@ -170,12 +178,14 @@ function Phase2Page() {
           return;
         }
         if (s.state === "mismatch_pending" && groups === null) {
-          // Lazy-load the groups + dropdown values when the worker hits the pause.
-          const m = await api.mismatch(runId);
+          // Lazy-load groups + dropdown values when the worker hits the pause.
+          // `groups` is in the effect dep array (see below) so this branch
+          // re-fires once after groups are stored; the cancelled flag guards.
+          const mismatchPayload = await api.mismatch(runId);
           if (!cancelled) {
-            setGroups(m.groups);
-            setMismatchBrandValues(m.brand_values ?? []);
-            setMismatchToolBrandValues(m.tool_brand_values ?? []);
+            setGroups(mismatchPayload.groups);
+            setMismatchBrandValues(mismatchPayload.brand_values ?? []);
+            setMismatchToolBrandValues(mismatchPayload.tool_brand_values ?? []);
           }
         }
         if (TERMINAL.has(s.state)) return;
@@ -322,7 +332,7 @@ function Phase2Page() {
     // immediately — analysts don't have to wait for the 60min idle-TTL
     // sweep.  Errors are swallowed: a 404 just means the run was
     // already evicted, which is the desired terminal state anyway.
-    const ids = [runId, postQcRunId, parentRunId || null].filter(Boolean) as string[];
+    const ids = [runId, postQcRunId, parentRunId].filter(Boolean) as string[];
     await Promise.all(
       ids.map((id) => api.remove(id).catch(() => undefined)),
     );
@@ -338,6 +348,12 @@ function Phase2Page() {
     setPostQcRunId(null);
     setPostQcStatus(null);
     router.replace("/phase2");
+  }
+
+  // Plain final-download click = "I'm done": wait so the file actually
+  // starts streaming, then run onReset to free server-side tmpdirs.
+  function finishAndReset(): void {
+    window.setTimeout(() => { void onReset(); }, RESET_DELAY_MS);
   }
 
   async function onPostQcUpload() {
@@ -605,7 +621,7 @@ function Phase2Page() {
                   a stale screen. */}
               <a
                 href={api.downloadUrl(postQcDownloadUrl)}
-                onClick={() => { window.setTimeout(() => { void onReset(); }, 6000); }}
+                onClick={finishAndReset}
                 className="btn-primary inline-flex items-center"
               >
                 Download AIC_Phase2_3_exports.zip

@@ -1,14 +1,10 @@
 "use client";
 
+// App header — kit's AppBar + PageHeader; NavTabs is the only AIC-specific bit.
+
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { AppBar, PageHeader, Wordmark } from "@/kit";
-
-/**
- * AIC's app header — kit's AppBar + PageHeader, with an app-specific
- * NavTabs as the AppBar center slot. The Wordmark + page hero shape are
- * shared with data_ingester and ADB-TOOL-v2; only NavTabs is local.
- */
 
 const NAV: { href: string; label: string }[] = [
   { href: "/",       label: "Phase 1" },

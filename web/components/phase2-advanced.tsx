@@ -1,27 +1,15 @@
 "use client";
 
-import type { BrandOverrideConfig, Phase2ScanResult, PrivateLabelRule } from "@/lib/types";
+// Advanced Phase 2 configuration disclosure: private-label rules (per-retailer
+// enable + label + parent column) and Client Brand override rules. The
+// brand/tool_brand pair itself is resolved from Attributes.txt at run time,
+// so the only column-picker here is the manufacturer column.
 
-/**
- * Advanced Phase 2 configuration disclosure.
- *
- * Two sections:
- *   • Private Label Rules — per-retailer (walmart/cvs/heb) enable + label,
- *     plus the Parent column that drives PL detection + the mismatch
- *     dialog's PARENT header.
- *   • Client Brand Rules — manufacturer + (BRAND, TOOL_BRAND) override
- *     mapping table.  The brand pair itself is now resolved from each
- *     Attributes.txt's Brand_Attribute=Y row, so the only column-picker
- *     left is the manufacturer column.
- */
+import type { BrandOverrideConfig, Phase2ScanResult, PrivateLabelRule } from "@/lib/types";
 
 export type PrivateLabelRules = Record<string, PrivateLabelRule>;
 
-/**
- * Row-shaped brand override rule, matching what the Streamlit
- * st.data_editor produced.  Each row maps to a single-element
- * BrandOverrideRule on submission.
- */
+// Row-shaped override rule; one row → one single-element BrandOverrideRule on submit.
 export type BrandOverrideRow = {
   manufacturer:  string;
   from_brand:    string;
@@ -338,12 +326,8 @@ export function Phase2AdvancedConfig({
 }
 
 
-/**
- * Free-text input with an optional dropdown of known values, mirroring
- * how Streamlit's data_editor falls back to TextColumn when no values
- * are available.  Renders as a <select> when ``options`` is non-empty,
- * otherwise as a plain <input>.
- */
+// Select dropdown when known options exist; falls back to plain input.
+// The "(custom)" sentinel preserves a value that isn't in the list.
 function RuleField({
   value, options, placeholder, onChange,
 }: {

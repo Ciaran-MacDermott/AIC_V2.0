@@ -1,6 +1,10 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+// QC wizard — step through each lookup sheet from /api/runs/{id}/qc/sheets.
+// Edits buffer in pendingEdits and auto-save (PUT) on a SAVE_DEBOUNCE_MS
+// debounce. Finalize POSTs and surfaces the workbook download URL.
+
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
@@ -10,6 +14,9 @@ import { QcGrid } from "@/components/qc-grid";
 import { LogTail } from "@/components/log-tail";
 
 const SAVE_DEBOUNCE_MS = 600;
+// Workflow-end teardown delay. Gives the browser headroom for a cold first
+// byte before the run is deleted server-side.
+const RESET_DELAY_MS = 6000;
 
 
 export default function QcWizardPageWrapper() {
@@ -25,22 +32,14 @@ function QcWizardPage() {
   const searchParams = useSearchParams();
   const runId = searchParams.get("runId") ?? "";
 
-  // Workflow-complete teardown: download click → wait so the browser
-  // actually finishes streaming the file, then delete the run server-
-  // side (frees the tmpdir + slot immediately, no waiting for idle TTL)
-  // and navigate home to a fresh upload form.  The "Continue to Phase 2"
-  // button is the explicit path for analysts who want to keep going;
-  // a plain Download click is the explicit "I'm done" signal.
-  //
-  // 6 s buffer: a slow first-byte (cold uvicorn worker, ad-blocker
-  // intercepting the GET) can stretch past a couple of seconds; this
-  // gives comfortable headroom without being long enough that a quick
-  // analyst sees the page hanging post-click.
+  // Plain Download click = "I'm done": wait so the file actually starts
+  // streaming, then delete the run server-side and reset. The Continue-to-
+  // Phase-2 button navigates away before this timer fires.
   function finishAndReset(): void {
     window.setTimeout(() => {
       if (runId) api.remove(runId).catch(() => undefined);
       router.replace("/");
-    }, 6000);
+    }, RESET_DELAY_MS);
   }
 
   const [sheetList, setSheetList] = useState<QcSheetSummary[] | null>(null);
@@ -51,7 +50,8 @@ function QcWizardPage() {
   const [finalising, setFinalising] = useState(false);
   const [status, setStatus] = useState<JobStatus | null>(null);
 
-  // Buffer of unsaved edits per sheet, keyed by row_id → attribute_value.
+  // Unsaved edits for the current sheet (cleared per sheet, line ~97).
+  // Keyed by row_id → attribute_value.
   const pendingEdits = useRef<Map<string, string>>(new Map());
   const saveTimer = useRef<number | null>(null);
 
@@ -190,7 +190,7 @@ function QcWizardPage() {
 
   const total = sheetList?.length ?? 0;
   const currentSheet = sheetList?.[step];
-  const stepProgress = useMemo(() => total === 0 ? 0 : step / total, [step, total]);
+  const stepProgress = total === 0 ? 0 : step / total;
 
   const pipelineStrip = status && status.log_tail.length > 0 ? (
     <details className="group surface-card-quiet mb-3 px-4 py-2 text-xs text-zinc-600">

@@ -111,11 +111,16 @@ export type PrivateLabelRule = {
   label: string;
 };
 
+export type BrandOverrideRule = {
+  manufacturers: string[];
+  brand_overrides: Record<string, string>;
+};
+
 export type BrandOverrideConfig = {
   enable: boolean;
   raw_manufacturer_col: string;
   raw_parent_col: string;
-  rules: { manufacturers: string[]; brand_overrides: Record<string, string> }[];
+  rules: BrandOverrideRule[];
 };
 
 export type Phase2Config = {

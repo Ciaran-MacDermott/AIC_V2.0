@@ -1,5 +1,9 @@
 "use client";
 
+// Pipeline log viewers. LogTail renders a static line array with
+// severity-colouring; FullLogTail polls /api/runs/{id}/logs incrementally
+// so the analyst sees the whole run, not just the live 60-line tail.
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 
@@ -10,7 +14,8 @@ const COLOUR_RULES: { test: RegExp; cls: string }[] = [
   { test: ERROR_RE, cls: "text-err" },
   { test: WARN_RE,  cls: "text-warn" },
   { test: /(done|complete|written|filled)/i,          cls: "text-ok"   },
-  { test: /(running|reading|building|writing|applying|start)/i, cls: "text-brand-700" },
+  // Word-bounded "start" so a stack trace mentioning "start" doesn't tint blue.
+  { test: /\b(running|reading|building|writing|applying|start)\b/i, cls: "text-brand-700" },
 ];
 
 function colourClass(line: string): string {
@@ -18,17 +23,8 @@ function colourClass(line: string): string {
   return "text-zinc-700";
 }
 
-/**
- * Live log viewer that fetches the *full* buffer via /api/runs/{id}/logs.
- *
- * Why a separate component from LogTail: status responses cap log_tail at
- * the last LOG_TAIL_SIZE (~60) lines so polling stays cheap.  When the
- * analyst opens the "Pipeline output" disclosure they expect to see the
- * whole run — the truncated tail looked like Phase A logs were missing.
- *
- * Mount-on-open keeps the polling cost off-screen: the parent renders
- * this only while the <details> is open, so closing it stops the fetches.
- */
+// Mount-on-open: parent gates rendering on <details>.open, so closing the
+// disclosure stops the fetches.
 export function FullLogTail({
   runId,
   active,

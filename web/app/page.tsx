@@ -1,5 +1,10 @@
 "use client";
 
+// Phase 1 page — file upload (xlsx+csv or zip) → POST /api/phase1/runs →
+// poll /api/runs/{id} every POLL_MS until qc_ready (auto-routes to /qc)
+// or a terminal state. Deep-linkable via ?runId=… so analysts can share
+// links and resume after a tab close.
+
 import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -12,7 +17,8 @@ import { FullLogTail } from "@/components/log-tail";
 import { RunErrorDialog } from "@/components/run-error-dialog";
 
 const POLL_MS = 700;
-// Terminal states the polling loop can stop on.
+// Terminal-for-this-page states. qc_ready and mismatch_pending route to
+// /qc and /phase2 respectively, not "the run failed" — they just stop polling here.
 const TERMINAL = new Set(["done", "error", "stopped", "qc_ready", "mismatch_pending"]);
 
 export default function Phase1PageWrapper() {

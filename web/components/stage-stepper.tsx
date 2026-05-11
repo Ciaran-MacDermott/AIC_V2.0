@@ -1,17 +1,13 @@
 "use client";
 
+// Horizontal stage indicator for Phase 2/3 runs. Highlights the active
+// step in brand purple, ticks past steps, dims future steps.
+// Keep PHASE2_STEPS and PHASE2_PROGRESSION in lockstep — both index by
+// JobState and the indices must align.
+
 import type { JobState } from "@/lib/types";
 
-/**
- * Horizontal stage indicator — mirrors the Streamlit `_stage_stepper`
- * helper at lines 459-493 of pages/2_Phase_3_Pipeline_and_QC.py.
- *
- * Each step represents one of the JobState values the worker passes
- * through.  The stepper highlights the active step in brand purple,
- * shows already-completed steps in zinc, and dims future steps.
- */
-
-const PHASE2_STEPS: { key: JobState | "config"; label: string }[] = [
+const PHASE2_STEPS: { key: JobState; label: string }[] = [
   { key: "running",          label: "1  Processing" },
   { key: "mismatch_pending", label: "2  Mismatch Review" },
   { key: "done",             label: "3  Cleaned Output QC" },
@@ -28,18 +24,12 @@ const PHASE2_PROGRESSION: Record<string, number> = {
   post_qc_done:      4,
 };
 
-export function StageStepper({
-  state,
-  steps = PHASE2_STEPS,
-}: {
-  state: JobState;
-  steps?: { key: string; label: string }[];
-}) {
+export function StageStepper({ state }: { state: JobState }) {
   const activeIndex = PHASE2_PROGRESSION[state] ?? 0;
 
   return (
     <div className="flex items-center flex-wrap gap-1 mb-4 text-xs">
-      {steps.map((step, i) => {
+      {PHASE2_STEPS.map((step, i) => {
         const status = i < activeIndex ? "done" : i === activeIndex ? "active" : "pending";
         const colour =
           status === "active" ? "text-brand-700 font-semibold" :
@@ -48,7 +38,7 @@ export function StageStepper({
         return (
           <span key={step.key} className="flex items-center gap-1">
             <span className={colour}>{step.label}</span>
-            {i < steps.length - 1 && (
+            {i < PHASE2_STEPS.length - 1 && (
               <span className="text-zinc-300 mx-1">›</span>
             )}
           </span>

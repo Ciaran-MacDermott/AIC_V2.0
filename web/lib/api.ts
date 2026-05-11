@@ -1,5 +1,8 @@
+// Fetch wrapper for the FastAPI BFF. One typed callable per backend route.
+// In dev: NEXT_PUBLIC_API_URL=http://localhost:8000 (Next on :3000, BFF on :8000).
+// In prod: empty string — same origin as the static frontend served by FastAPI.
+
 import type {
-  ActiveRuns,
   JobStatus,
   LogChunk,
   MismatchPayload,
@@ -7,7 +10,6 @@ import type {
   Phase2Config,
   Phase2Done,
   Phase2ScanResult,
-  PostQcDone,
   QcEditPayload,
   QcFinalized,
   QcSheetList,
@@ -15,8 +17,6 @@ import type {
   RunCreated,
 } from "./types";
 
-// In dev: NEXT_PUBLIC_API_URL=http://localhost:8000 (Next on :3000, BFF on :8000)
-// In prod: empty string — same origin as the static frontend served by FastAPI.
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 async function getJSON<T>(path: string): Promise<T> {
@@ -38,8 +38,6 @@ async function postJSON<T>(path: string, body?: unknown, method = "POST"): Promi
 }
 
 export const api = {
-  health:        () => getJSON<{ status: string }>("/api/health"),
-
   startPhase1:   async (xlsx: File, csv: File): Promise<RunCreated> => {
     const fd = new FormData();
     fd.append("xlsx", xlsx);
@@ -57,7 +55,6 @@ export const api = {
     return res.json();
   },
 
-  listRuns:      () => getJSON<ActiveRuns>(`/api/runs`),
   status:        (id: string) => getJSON<JobStatus>(`/api/runs/${id}`),
   logsSince:     (id: string, since: number) =>
     getJSON<LogChunk>(`/api/runs/${id}/logs?since=${since}`),
@@ -76,21 +73,6 @@ export const api = {
     fd.append("zip", zipFile);
     fd.append("config", JSON.stringify(config));
     const res = await fetch(`${API_BASE}/api/phase2/runs`, { method: "POST", body: fd });
-    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-    return res.json();
-  },
-
-  startPhase2FromFiles: async (
-    xlsx: File, modelInfo: File, attributes: File, attributeValues: File,
-    config: Phase2Config,
-  ): Promise<RunCreated> => {
-    const fd = new FormData();
-    fd.append("xlsx", xlsx);
-    fd.append("model_info", modelInfo);
-    fd.append("attributes", attributes);
-    fd.append("attribute_values", attributeValues);
-    fd.append("config", JSON.stringify(config));
-    const res = await fetch(`${API_BASE}/api/phase2/runs/files`, { method: "POST", body: fd });
     if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
     return res.json();
   },
@@ -116,31 +98,13 @@ export const api = {
     return res.json();
   },
 
-  scanPhase2Xlsx: async (xlsx: File): Promise<Phase2ScanResult> => {
-    const fd = new FormData();
-    fd.append("xlsx", xlsx);
-    const res = await fetch(`${API_BASE}/api/phase2/scan/xlsx`, { method: "POST", body: fd });
-    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-    return res.json();
-  },
-
   scanPhase2FromParent: (parentRunId: string) =>
     getJSON<Phase2ScanResult>(
       `/api/phase2/scan/from-parent/${encodeURIComponent(parentRunId)}`,
     ),
 
-  postQcUpload: async (id: string, xlsx: File): Promise<PostQcDone> => {
-    const fd = new FormData();
-    fd.append("xlsx", xlsx);
-    const res = await fetch(`${API_BASE}/api/runs/${id}/post_qc`, { method: "POST", body: fd });
-    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-    return res.json();
-  },
-
-  // Standalone post-QC: creates a fresh run for the edited xlsx, no
-  // dependency on a prior Phase 2 run still being in the registry.
-  // Returns RunCreated; the client polls /api/runs/{id} for state and
-  // downloads /api/runs/{id}/artifacts/post_qc.zip when post_qc_done.
+  // Standalone post-QC creates a fresh run for the edited xlsx, so it
+  // survives idle-eviction or BFF restarts of the parent Phase 2 run.
   postQcStandalone: async (xlsx: File, isCustomCollapse: boolean): Promise<RunCreated> => {
     const fd = new FormData();
     fd.append("xlsx", xlsx);

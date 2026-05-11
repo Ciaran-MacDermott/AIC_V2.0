@@ -1,9 +1,14 @@
 "use client";
 
+// Error banner for failed runs. Picks tone + label from the worker's
+// classified error_category (input/config/server). Falls back to "Server
+// error" for transport-level failures that never reached the classifier.
+
 import { useState } from "react";
 import { api } from "@/lib/api";
 import type { JobStatus } from "@/lib/types";
 
+// input and config share the amber tone — both are "your fix", not "ours".
 const CATEGORY_TONE: Record<NonNullable<JobStatus["error_category"]>, {
   border: string; bg: string; pill: string; pillText: string;
 }> = {

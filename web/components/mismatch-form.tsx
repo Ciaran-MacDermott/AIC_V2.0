@@ -1,33 +1,21 @@
 "use client";
 
+// Mismatch review wizard. One group at a time; BRAND_NEW / TOOL_BRAND_NEW
+// dropdowns are sourced from the full pipeline df. Expected-pattern rows
+// (PRIVATE LABEL / RESTRICTED / EXCLUDE / configured override) are greyed
+// and skippable. Corrections accumulate across groups and submit as a
+// single batch on the last group.
+
 import { useMemo, useState } from "react";
 import type { MismatchCorrection, MismatchGroup } from "@/lib/types";
 
-/**
- * Mismatch review wizard — one group at a time, mirroring the Streamlit
- * page (lines 1276-1382 of pages/2_Phase_3_Pipeline_and_QC.py):
- *
- *   • "Group X of Y" stepper across the top.
- *   • Pre-populated BRAND_NEW / TOOL_BRAND_NEW dropdowns sourced from the
- *     full pipeline df so the analyst sees every legitimate value.
- *   • Greyed-out rows where _is_expected == 1 (PRIVATE LABEL prefix,
- *     RESTRICTED suffix, EXCLUDE in TOOL_BRAND, configured override).
- *   • Light-purple tint on rows the analyst has changed.
- *   • DESCRIPTION + RMRR enrichment columns rendered when the server
- *     attached them.
- *   • "No changes — Continue" / "Next model" / "Continue to Part 2"
- *     navigation pattern.
- *
- * Corrections accumulate across groups and are submitted as a single
- * batch when the analyst exits the last group.
- */
+// Server marks expected-pattern rows by setting _is_expected to the string "1".
+const EXPECTED_FLAG = "1";
 
 type RowDecision = {
   brand_new:      string;
   tool_brand_new: string;
 };
-
-type AccumulatedCorrections = MismatchCorrection[];
 
 
 export function MismatchForm({
@@ -40,13 +28,13 @@ export function MismatchForm({
   groups: MismatchGroup[];
   brandValues: string[];
   toolBrandValues: string[];
-  onResolve: (corrections: AccumulatedCorrections) => void;
+  onResolve: (corrections: MismatchCorrection[]) => void;
   isSubmitting: boolean;
 }) {
   const [groupIdx, setGroupIdx] = useState(0);
   // decisions[`${gi}:${ri}`] = { brand_new, tool_brand_new }
   const [decisions, setDecisions] = useState<Record<string, RowDecision>>({});
-  const [accumulated, setAccumulated] = useState<AccumulatedCorrections>([]);
+  const [accumulated, setAccumulated] = useState<MismatchCorrection[]>([]);
 
   const total = groups.length;
   const group = groups[groupIdx];
@@ -86,13 +74,9 @@ export function MismatchForm({
     });
   }
 
-  /**
-   * Collapse the analyst's edits in this group into the
-   * MismatchCorrection[] the server expects.  Mirrors _collect_corrections
-   * in the Streamlit page — only emit a correction when the BRAND_NEW or
-   * TOOL_BRAND_NEW differs from the original.
-   */
-  function corrections_for_current_group(): MismatchCorrection[] {
+  // Collapse this group's edits into MismatchCorrection[]. Only emits a
+  // correction when BRAND_NEW or TOOL_BRAND_NEW differs from the original.
+  function correctionsForCurrentGroup(): MismatchCorrection[] {
     if (!group) return [];
     const out: MismatchCorrection[] = [];
     group.rows.forEach((row, ri) => {
@@ -212,7 +196,7 @@ export function MismatchForm({
           </thead>
           <tbody>
             {group.rows.map((row, ri) => {
-              const isExpected = (row._is_expected ?? "0") === "1";
+              const isExpected = (row._is_expected ?? "0") === EXPECTED_FLAG;
               const d = decisionFor(ri, row);
               const changed =
                 d.brand_new.trim()      !== (row.BRAND ?? "").trim() ||
@@ -293,7 +277,7 @@ export function MismatchForm({
         <button
           type="button"
           disabled={isSubmitting}
-          onClick={() => advanceWith(corrections_for_current_group())}
+          onClick={() => advanceWith(correctionsForCurrentGroup())}
           className="btn-primary"
         >
           {isSubmitting

@@ -1,5 +1,8 @@
 "use client";
 
+// Pipeline progress card — stage label, elapsed time, queue chip (while
+// queued), download-log link, and a state-coloured progress bar.
+
 import { api } from "@/lib/api";
 import type { JobStatus } from "@/lib/types";
 

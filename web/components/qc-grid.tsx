@@ -1,5 +1,13 @@
 "use client";
 
+// ag-grid wrapper for one QC lookup sheet. Edited cells tint via
+// cellClassRules that compare live rowData against payload.original_values
+// (passed through grid context so we don't rebuild colDefs per keystroke).
+//
+// ag-grid-community v32 (package install) auto-registers community modules.
+// Calling ModuleRegistry.registerModules from the package surface triggers
+// AG Grid's "mixing modules and packages" warning, so we don't.
+
 import { AgGridReact } from "ag-grid-react";
 import type {
   CellClassParams,
@@ -9,13 +17,9 @@ import type {
   FirstDataRenderedEvent,
   ICellEditorParams,
 } from "ag-grid-community";
-import { useMemo, useRef } from "react";
+import { useMemo } from "react";
 
 import type { QcSheetPayload } from "@/lib/types";
-
-// ag-grid-community v32 (package install) auto-registers community modules.
-// Calling ModuleRegistry.registerModules from the package surface triggers
-// AG Grid's "mixing modules and packages" warning, so we don't.
 
 
 function classRulesFor(field: string, attr: string): CellClassRules {
@@ -55,8 +59,6 @@ export function QcGrid({
   payload: QcSheetPayload;
   onEdit: (rowId: string, value: string) => void;
 }) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
   const colDefs: ColDef[] = useMemo(() => {
     return payload.columns
       .filter((c) => c.field !== "_row_id")
@@ -103,11 +105,7 @@ export function QcGrid({
   }
 
   return (
-    <div
-      ref={containerRef}
-      className="ag-theme-quartz w-full"
-      style={{ height: 520 }}
-    >
+    <div className="ag-theme-quartz w-full" style={{ height: 520 }}>
       <AgGridReact
         rowData={payload.rows as Record<string, unknown>[]}
         columnDefs={colDefs}
