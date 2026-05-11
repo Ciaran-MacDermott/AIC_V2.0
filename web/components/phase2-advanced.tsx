@@ -172,38 +172,9 @@ export function Phase2AdvancedConfig({
             </button>
           </div>
 
-          {/* Retailer-identifier column — drives PL detection (Step 5) and
-              the PARENT column rendered in the BRAND-vs-TOOL_BRAND mismatch
-              dialog (Step 13). Lives in the PL section because that's
-              where its effect shows up. */}
-          <label className="block text-xs text-zinc-600 pt-2">
-            <span className="block mb-1">Retailer identifier col</span>
-            {scan && scan.raw_parent_columns.length > 0 ? (
-              <select
-                value={brandOverride.raw_parent_col}
-                onChange={(e) =>
-                  setBrandOverride({ ...brandOverride, raw_parent_col: e.target.value })
-                }
-                className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
-              >
-                {scan.raw_parent_columns.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-            ) : (
-              <input
-                type="text"
-                value={brandOverride.raw_parent_col}
-                onChange={(e) =>
-                  setBrandOverride({ ...brandOverride, raw_parent_col: e.target.value })
-                }
-                className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
-              />
-            )}
-            <span className="block mt-1 text-[11px] text-zinc-500">
-              Column whose values identify the retailer (e.g. RAW_MANUFACTURER).
-            </span>
-          </label>
+          {/* raw_parent_col is auto-resolved server-side (defaults to
+              RAW_MANUFACTURER per schemas.py) — the explicit picker was
+              removed in favour of per-rule dropdowns below. */}
         </section>
 
         {/* ── Brand Override ───────────────────────────────────────────
