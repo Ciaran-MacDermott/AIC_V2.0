@@ -1,6 +1,6 @@
 // Mirrors api/schemas.py — keep these in sync when the contract changes.
 
-export type Phase = "phase1" | "phase2";
+export type Phase = "phase1" | "phase2" | "post_qc";
 
 export type JobState =
   | "queued"

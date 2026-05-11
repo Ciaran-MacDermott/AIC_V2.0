@@ -23,7 +23,7 @@ JobState = Literal[
     "post_qc_done",
 ]
 
-Phase = Literal["phase1", "phase2"]
+Phase = Literal["phase1", "phase2", "post_qc"]
 
 
 class RunCreated(BaseModel):
