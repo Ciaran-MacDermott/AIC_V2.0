@@ -71,8 +71,10 @@ export function QcGrid({
         // the dropdown affordance is visible without a double-click discovery.
         headerClass: c.editable ? "ag-header-editable" : undefined,
         cellClass: c.editable ? "cell-editable-select" : undefined,
-        // Editable column needs slightly more room for value + chevron.
-        maxWidth: c.editable ? 280 : undefined,
+        // Editable: extra room for value + chevron. Note: pipeline notes like
+        // "ML not in candidates" otherwise hit the defaultColDef.maxWidth cap
+        // and truncate mid-word even with horizontal scroll.
+        maxWidth: c.editable ? 280 : c.field === "Note" ? 600 : undefined,
         cellEditor: c.editable ? "agSelectCellEditor" : undefined,
         cellEditorParams: c.editable
           ? ({ values: payload.attribute_options } as Partial<ICellEditorParams>)
