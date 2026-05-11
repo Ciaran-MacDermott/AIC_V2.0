@@ -276,7 +276,7 @@ export function Phase2AdvancedConfig({
               to-TOOL_BRAND) plus a fixed-width row-delete slot. */}
           <div className="space-y-2">
             <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1fr_2.5rem] gap-3 text-[11px] text-zinc-500 font-medium">
-              <div>Manufacturer value</div>
+              <div>Client Manufacturer value</div>
               <div>From BRAND value</div>
               <div>To TOOL_BRAND value</div>
               <div />
@@ -291,7 +291,7 @@ export function Phase2AdvancedConfig({
                   <RuleField
                     value={row.manufacturer}
                     options={mfrValues}
-                    placeholder="manufacturer value"
+                    placeholder="client manufacturer value"
                     onChange={(v) =>
                       setBrandOverrideRows(
                         brandOverrideRows.map((r, j) =>
