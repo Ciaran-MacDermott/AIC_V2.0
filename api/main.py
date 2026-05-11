@@ -38,6 +38,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from api import jobs, qc_view, worker
 from api.inputs import (
     InputError,
+    _resolve_brand_pairs_from_dir,
     extract_zip_with_unwrap,
     find_phase1_inputs,
     scan_phase2_directory,
@@ -554,8 +555,12 @@ def scan_phase2_from_parent(parent_run_id: str) -> Phase2ScanResult:
             409,
             "Parent run has no QC workbook yet — finish Phase 1 QC first.",
         )
+    # The parent run's tmpdir still has the original zip contents around
+    # (Attributes.txt et al.) — walk it so Phase 2 picks up the declared
+    # BRAND / TOOL_BRAND pair instead of falling back to literal columns.
+    brand_pairs = _resolve_brand_pairs_from_dir(parent.tmpdir)
     try:
-        meta = scan_phase2_xlsx(qc_path)
+        meta = scan_phase2_xlsx(qc_path, brand_pairs=brand_pairs)
     except InputError as exc:
         raise HTTPException(400, str(exc))
     return Phase2ScanResult(scan_id=_EMPTY_SCAN_ID, **meta.__dict__)
