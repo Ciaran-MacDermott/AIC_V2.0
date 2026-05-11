@@ -328,16 +328,6 @@ export function Phase2AdvancedConfig({
             >
               + Add rule
             </button>
-            {toolBrandValues.length > 0 && (
-              <details className="text-xs text-zinc-500">
-                <summary className="cursor-pointer">
-                  Reference: existing TOOL_BRAND values ({toolBrandValues.length})
-                </summary>
-                <div className="mt-1 max-h-32 overflow-y-auto font-mono">
-                  {toolBrandValues.join(", ")}
-                </div>
-              </details>
-            )}
           </div>
         </section>
       </div>
