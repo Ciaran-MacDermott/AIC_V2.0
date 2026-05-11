@@ -218,7 +218,7 @@ export function Phase2AdvancedConfig({
             <p className="text-xs text-zinc-500 mt-0.5">
               Force-map (manufacturer, BRAND) pairs to a specific TOOL_BRAND value.
               Each rule rewrites TOOL_BRAND only on rows where the manufacturer column
-              matches one of the listed values — leaving every other row untouched.
+              matches one of the listed values.
             </p>
           </div>
 

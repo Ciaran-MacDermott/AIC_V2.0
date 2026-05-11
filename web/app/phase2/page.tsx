@@ -395,7 +395,14 @@ function Phase2Page() {
       <Header
         eyebrow="Phase 2 & 3"
         title="Pipeline & QC"
-        subtitle={"Run Phase 2 (attribute assembly) → Phase 3 (quality checks) on a zipped project.\nResolve any BRAND vs TOOL_BRAND mismatches when prompted, then QC the cleaned workbook and re-upload to export per-category CSVs."}
+        subtitle={
+          <>
+            Run Phase 2 (attribute assembly) → Phase 3 (quality checks) on a zipped project. Resolve any BRAND vs TOOL_BRAND mismatches when prompted, then QC the cleaned workbook and re-upload to export per-category CSVs.
+            <span className="block mt-2 text-[14px] text-zinc-500">
+              Tip: keep the run log open alongside the workbook during Excel QC — it flags warnings and pipeline notes worth a second look on unusual rows.
+            </span>
+          </>
+        }
       />
       <main className="mx-auto max-w-5xl px-6 pb-12">
 
@@ -571,7 +578,10 @@ function Phase2Page() {
                 )}
               </div>
               <p className="mt-2 text-xs text-emerald-900/70">
-                Grab the log alongside the workbook — useful for QC review before re-uploading below.
+                Open both side-by-side during QC — the log surfaces warnings,
+                missing columns, and pipeline notes you can cross-reference with
+                rows in the Cleaned Output sheet. Anything flagged there is
+                usually what to scrutinise (or correct) before re-uploading below.
               </p>
             </div>
           )}
