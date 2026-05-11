@@ -249,16 +249,27 @@ def run_through_step_12(
         # Additional pass: directly validate directory names as column suffixes.
         # Handles projects where only suffixed columns exist (no base TOOL_X/X pair),
         # e.g. SUBBRAND_MULO / TOOL_SUBBRAND_MULO with no base SUBBRAND / TOOL_SUBBRAND.
+        # Try the full dir name first, then each underscore-delimited segment so
+        # dirs like Tool_files_CLM_FOOD resolve to _FOOD (the actual column suffix).
         for dir_name in subdir_names:
             dir_upper = dir_name.upper()
-            if dir_upper not in known_suffixes:
-                suffix_tag = f"_{dir_upper}"
+            candidates = [dir_upper]
+            if "_" in dir_upper:
+                candidates.extend(s for s in dir_upper.split("_") if s and s != dir_upper)
+            for candidate in candidates:
+                if candidate in known_suffixes:
+                    break
+                suffix_tag = f"_{candidate}"
+                matched = False
                 for col_key in col_upper_set:
                     if col_key.startswith("TOOL_") and col_key.endswith(suffix_tag):
                         non_tool = col_key[len("TOOL_"):]
                         if non_tool in col_upper_set:
-                            known_suffixes.add(dir_upper)
+                            known_suffixes.add(candidate)
+                            matched = True
                             break
+                if matched:
+                    break
 
         valid_model_suffixes = set()
         print(f"{INDENT}Multi-model subdirectories detected:")
