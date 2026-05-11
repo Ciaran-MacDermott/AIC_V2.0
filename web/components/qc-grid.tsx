@@ -37,7 +37,7 @@ function classRulesFor(field: string, attr: string): CellClassRules {
 
   if (field === "QC Priority") {
     rules["cell-high-priority"] = (p: CellClassParams) => p.value === "HIGH";
-  } else if (field === "score" || field === "ML Matches Lookup") {
+  } else if (field === "score") {
     rules["cell-low-score-no-ml"] = (p: CellClassParams) => {
       const flags = (p.context?.rowFlags ?? {}) as Record<string, string[]>;
       const rowId = p.data?._row_id as string | undefined;

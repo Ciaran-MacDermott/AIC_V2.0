@@ -116,8 +116,13 @@ def build_sheet_payload(sheet_key: str, df: pd.DataFrame,
 
     columns: list[ColumnDef] = []
     for col in display_df.columns:
+        # Rank is always 1 in this view — keep it in the row data so the
+        # xlsx writeback round-trips unchanged, but don't render it as a
+        # column in the grid.
+        if col == "Rank":
+            continue
         editable = (col == attr)
-        col_type = "number" if col in ("score", "ML Score", "Rank") else "text"
+        col_type = "number" if col in ("score", "ML Score") else "text"
         columns.append(ColumnDef(field=col, header=col, editable=editable, type=col_type))
 
     attr_vals = (
