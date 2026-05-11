@@ -126,7 +126,7 @@ def test_phase1_zip_unwraps_single_top_level_folder(
     assert r.status_code == 200, r.text
     run_id = r.json()["run_id"]
     _wait_for_state(client, run_id, states={"qc_ready", "error", "stopped"})
-    assert "/project/" in seen["excel"], seen["excel"]
+    assert "project" in Path(seen["excel"]).parts, seen["excel"]
 
 
 def test_phase1_zip_missing_xlsx_returns_400(
