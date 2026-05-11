@@ -1,24 +1,13 @@
 """
 NLTK bootstrap for walled-garden deployments.
 
-The vendored ml_package (text_match.py, xgb_classifier.py) calls
-``nltk.download('punkt' / 'punkt_tab' / 'stopwords', quiet=True)`` at
-module import time.  In production the box has no internet, so the
-download silently fails and the very next call —
-``stopwords.words('english')`` — raises LookupError.
+The vendored ml_package calls ``nltk.download(...)`` at module import.
+In production the box has no internet, so those calls fail silently and
+the next ``stopwords.words('english')`` raises LookupError.
 
-Fix: ship the three English corpora in ``refactor/nltk_data/`` and prime
-NLTK before ``ml_package`` ever loads:
-
-  1. Prepend the bundled directory to ``nltk.data.path`` so the
-     stopwords + punkt + punkt_tab loaders resolve against it first.
-  2. Monkey-patch ``nltk.download`` to a no-op so the upstream
-     download calls don't attempt outbound HTTPS in a sealed env.
-
-Importing ``api`` runs this module via api/__init__.py, which executes
-before api.pipeline (and therefore ml_package) is reachable on import.
-We don't modify the vendored ml_package — that stays a clean copy of
-upstream so future ml_package refreshes don't blow this fix away.
+Fix: ship corpora under ``nltk_data/`` and prime NLTK before ml_package
+loads — prepend the bundle to ``nltk.data.path`` and monkey-patch
+``nltk.download`` to a no-op. Runs from api/__init__.py.
 """
 
 from __future__ import annotations

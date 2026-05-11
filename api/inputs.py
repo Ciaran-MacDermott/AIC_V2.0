@@ -132,13 +132,10 @@ class Phase2Scan:
 
 def _resolve_brand_pairs_from_dir(root: Path) -> list[tuple[str, str]]:
     """
-    Walk ``root`` for every Attributes.txt (root + immediate subdirs) and
-    collect literal (brand_col, tool_brand_col) tuples from each
-    Brand_Attribute=Y row.  Returns deduplicated, ordered pairs.
-
-    Returns an empty list when no Attributes.txt is present or none carry
-    a Brand_Attribute column — callers fall back to legacy BRAND /
-    TOOL_BRAND assumptions in that case.
+    Walk ``root`` for every Attributes.txt and collect (brand_col, tool_brand_col)
+    pairs from Brand_Attribute=Y rows. Empty list when no Attributes.txt is
+    present or no Brand_Attribute column exists — callers fall back to literal
+    BRAND / TOOL_BRAND columns in that case.
     """
     try:
         import pandas as pd  # local
@@ -184,18 +181,11 @@ def _resolve_brand_pairs_from_dir(root: Path) -> list[tuple[str, str]]:
 
 def scan_phase2_xlsx(xlsx_path: Path, brand_pairs: Optional[list] = None) -> Phase2Scan:
     """
-    Inspect File_For_Mapping_QC.xlsx and return the autodetected
-    column metadata.  Mirrors _load_cols_from_dir / _load_cols_from_bytes
-    in the Streamlit page so the new UI can pre-fill the same defaults
-    without the user typing column names by hand.
-
+    Inspect File_For_Mapping_QC.xlsx and return autodetected column metadata.
     ``brand_pairs`` (from a sibling Attributes.txt walk) drives the
-    brand_values / tool_brand_values / detected_brand_pairs surfaces.
-    When None or empty, the scan falls back to reading literal "BRAND" /
-    "TOOL_BRAND" columns — preserving behaviour for loose-file uploads
-    where Attributes.txt isn't available.
-
-    Raises ``InputError`` when the workbook has no FLAT_FILE sheet.
+    brand_values / tool_brand_values surfaces; when empty, falls back to
+    literal BRAND / TOOL_BRAND columns. Raises ``InputError`` when the
+    FLAT_FILE sheet is missing.
     """
     try:
         import pandas as pd  # local — pandas isn't always installed in stub envs
@@ -287,11 +277,9 @@ def scan_phase2_xlsx(xlsx_path: Path, brand_pairs: Optional[list] = None) -> Pha
 
 def scan_phase2_directory(root: Path) -> Phase2Scan:
     """
-    Find File_For_Mapping_QC.xlsx anywhere under ``root`` and scan it.
-    Resolves brand pairs from sibling Attributes.txt files so the UI sees
-    the actual brand/tool_brand columns the project uses (handles clients
-    with custom brand attributes like SUB_BRAND, multi-model suffixed
-    columns like BRAND_MULO, etc.).
+    Find File_For_Mapping_QC.xlsx under ``root`` and scan it. Resolves brand
+    pairs from sibling Attributes.txt files for multi-model and custom-brand
+    projects (handles BRAND_MULO, SUB_BRAND, etc.).
     """
     for p in sorted(root.rglob("*.xlsx")):
         if "file_for_mapping_qc" not in p.name.lower():

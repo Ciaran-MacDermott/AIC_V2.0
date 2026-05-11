@@ -120,9 +120,15 @@ def build_sheet_payload(sheet_key: str, df: pd.DataFrame,
         col_type = "number" if col in ("score", "ML Score", "Rank") else "text"
         columns.append(ColumnDef(field=col, header=col, editable=editable, type=col_type))
 
-    attr_vals = sorted({str(v) for v in display_df[attr].tolist() if v not in ("", "nan", None)}) if attr in display_df.columns else []
-    ml_vals   = sorted({str(v) for v in display_df["ML Suggestion"].tolist() if v not in ("", "nan", None)}) if "ML Suggestion" in display_df.columns else []
-    options   = [""] + sorted(set(attr_vals + ml_vals))
+    attr_vals = (
+        sorted({str(v) for v in display_df[attr].tolist() if v not in ("", "nan", None)})
+        if attr in display_df.columns else []
+    )
+    ml_vals = (
+        sorted({str(v) for v in display_df["ML Suggestion"].tolist() if v not in ("", "nan", None)})
+        if "ML Suggestion" in display_df.columns else []
+    )
+    options = [""] + sorted(set(attr_vals + ml_vals))
 
     return QcSheetPayload(
         key=sheet_key,

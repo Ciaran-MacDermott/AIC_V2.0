@@ -1,16 +1,10 @@
 """
-Phase 1 pipeline adapter.
+Phase 1 pipeline adapter — the only module that imports ml_package.
 
-This file is the only place that knows about ml_package. It mirrors the
-orchestration in 1_Phase_1_Attribute_Mapping.py::_run_pipeline so outputs
-stay reproducible whether the user runs Streamlit (legacy) or the new
-FastAPI/Next.js UI.
-
-The worker thread captures stdout into the JobRecord's log buffer, so
-all the print() statements in this function flow into the live log box
-exactly the way they do in the Streamlit version.
-
-Stage progression mirrors _STAGE_PROGRESS in the Streamlit page.
+The worker thread captures stdout, so print() banners in run_phase1 flow
+straight into the live log box. STAGE_PROGRESS keys match those banners
+verbatim — the worker's _LogStream lowercases each line and substring-
+matches to advance the progress bar.
 """
 
 from __future__ import annotations
@@ -67,8 +61,9 @@ class Phase1Payload:
 def run_phase1(excel_path: str, csv_path: str,
                stop_event: Optional[threading.Event] = None) -> Phase1Payload:
     """
-    Mirror of streamlit_app `_run_pipeline` minus the stdout redirection
-    plumbing — the worker handles that.
+    Phase 1 pipeline: read inputs → mappinglookup → BM25 + XGBoost in
+    parallel → ensemble. Prints stage banners that the worker's _LogStream
+    parses to advance the progress bar. Honours stop_event between stages.
     """
     def _maybe_stop():
         if stop_event and stop_event.is_set():

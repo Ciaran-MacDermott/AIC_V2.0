@@ -82,26 +82,6 @@ class MismatchReviewNeeded(Exception):
         self.phase_a_state = phase_a_state
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Default configuration
-# ═══════════════════════════════════════════════════════════════════════════
-# Mirrors _DEFAULT_PL_ROWS / _build_pl_config in the Streamlit page so the
-# new UI can ship without re-implementing every option on day one.
-
-DEFAULT_PRIVATE_LABEL_CONFIG: dict[str, Any] = {
-    "walmart": {"enabled": True,  "label": "PRIVATE LABEL RESTRICTED"},
-    "cvs":     {"enabled": True,  "label": "PRIVATE LABEL EXCLUDE"},
-    "heb":     {"enabled": False, "label": "PRIVATE LABEL RESTRICTED"},
-}
-
-DEFAULT_BRAND_OVERRIDE_CONFIG: dict[str, Any] = {
-    "enable":               False,
-    "raw_manufacturer_col": "RAW_MANUFACTURER",
-    "raw_parent_col":       "RAW_PARENT",
-    "rules":                [],
-}
-
-
 @dataclass
 class Phase2Inputs:
     """Configuration captured from the request and frozen for the worker."""
@@ -210,10 +190,8 @@ def run_phase_b(state: Phase2InterimState,
                 ) -> Phase2Result:
     """
     Apply analyst corrections (if any), run Steps 14-17, then write the
-    cleaned-output workbook to ``output_dir / output.xlsx``.
-
-    The output sheet names mirror the Streamlit version exactly so any
-    downstream tooling (post-QC importer, report templates) keeps working.
+    cleaned-output workbook to ``output_dir / output.xlsx``. Sheet names
+    mirror the legacy version exactly so post-QC importers keep working.
     """
     if stop_event and stop_event.is_set():
         raise PipelineStopped()
@@ -288,13 +266,10 @@ def _modeling_attribute_columns(meta_df: Optional[pd.DataFrame]) -> list[str]:
 
 def _derive_output_filename(df: pd.DataFrame) -> str:
     """
-    Build ``CATEGORY_YYYY-MM-DD_qc_output.xlsx`` from the cleaned-output
-    dataframe.  The category is sourced from ASSORTMENT_CATEGORY_DEFINITION,
-    which Step 2 of the pipeline aligns to ModelInfo's Category_Name — so
-    every row carries the same value by the time we get here.
-
-    Falls back to ``OUTPUT_<date>_qc_output.xlsx`` if the column is missing
-    or all-blank, keeping the download path safe.
+    Build ``CATEGORY_YYYY-MM-DD_qc_output.xlsx``. Category comes from
+    ASSORTMENT_CATEGORY_DEFINITION (aligned to ModelInfo's Category_Name by
+    Step 2, so uniform across rows). Falls back to
+    ``OUTPUT_<date>_<uuid>_qc_output.xlsx`` when missing or blank.
     """
     cat_col = next(
         (c for c in df.columns if str(c).upper() == "ASSORTMENT_CATEGORY_DEFINITION"),
@@ -551,20 +526,10 @@ def collect_dropdown_values(
     main_df: Optional["pd.DataFrame"] = None,
 ) -> tuple[list[str], list[str]]:
     """
-    Distinct BRAND + TOOL_BRAND values to power the wizard's dropdowns.
-
-    Streamlit reads these from the full pipeline df (lines 1305-1314 of
-    pages/2_Phase_3_Pipeline_and_QC.py) so the analyst sees every brand
-    that exists in the data — not just the mismatched subset.  When the
-    df is unavailable we fall back to the values present in the groups.
-
-    Multi-model runs surface one group per (BRAND_X, TOOL_BRAND_X) pair
-    and the wire payload carries a single shared dropdown list reused
-    across all groups.  Read every group's column pair so suffixed-only
-    values (e.g. an "AO CLOROX RESTRICTED" written into TOOL_BRAND_TGT
-    by step 12 but absent from groups[0]'s column) appear as selectable
-    options — otherwise the React <select> falls back to the empty
-    option for those rows.
+    Distinct BRAND + TOOL_BRAND values for the wizard's dropdowns.
+    Sourced from main_df so analysts see every legitimate value (not just
+    the mismatched subset). Multi-model groups union their column pairs.
+    Falls back to the mismatch frames themselves when main_df is None.
     """
     if main_df is not None and len(groups) > 0:
         col_upper = {str(c).upper(): c for c in main_df.columns}

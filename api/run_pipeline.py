@@ -76,9 +76,13 @@ def _dump_error(tmpdir: Path, exc: BaseException) -> None:
     """Pickle the exception so the parent can call classify(exc) on it."""
     try:
         _dump_pkl(tmpdir / "error.pkl", exc)
-    except Exception:
+    except Exception as pickle_exc:
         # Some exceptions (e.g. with unpicklable __cause__) won't round-trip;
         # fall back to a plain RuntimeError carrying the message.
+        print(
+            f"[run_pipeline] error.pkl fallback (unpicklable {type(exc).__name__}): {pickle_exc!r}",
+            file=sys.stderr,
+        )
         _dump_pkl(tmpdir / "error.pkl", RuntimeError(str(exc)))
 
 
@@ -86,10 +90,8 @@ def _dump_error(tmpdir: Path, exc: BaseException) -> None:
 
 def _safe_run(tmpdir: Path, fn, *, stopped_excs: tuple = ()) -> int:
     """
-    Run ``fn(tmpdir)`` returning a clean ExitCode.  Maps cooperative-stop
-    exceptions to STOPPED, anything else to ERROR (with the exception
-    pickled into error.pkl so the parent can classify() it).  Mismatch
-    handling is per-command so it lives in the caller.
+    Run ``fn(tmpdir)``. Maps cooperative-stop excs to ExitCode.STOPPED;
+    anything else pickles to error.pkl and returns ExitCode.ERROR.
     """
     try:
         return fn(tmpdir)

@@ -28,13 +28,9 @@ class FriendlyError:
 
 def classify(exc: BaseException) -> FriendlyError:
     """
-    Map ``exc`` to a FriendlyError describing what went wrong and how
-    to fix it.  Falls back to a generic 'unexpected failure' message
-    when the exception type isn't recognised.
-
-    Order matters: more specific message-based matches go first so a
-    RuntimeError saying "No FINAL sheet…" doesn't fall through to the
-    generic RuntimeError branch.
+    Map ``exc`` to a FriendlyError; falls back to a generic server-side
+    message. Order matters — message-based matches go before isinstance
+    branches so a "No FINAL sheet" RuntimeError isn't generalised.
     """
     msg = str(exc)
     low = msg.lower()
@@ -115,9 +111,5 @@ def classify(exc: BaseException) -> FriendlyError:
 
 
 def technical_detail(exc: BaseException, traceback_text: Optional[str]) -> str:
-    """
-    Format a one-line summary the dialog can show under a
-    'Technical detail' disclosure.  Full traceback is kept in
-    record.error for the log download / support escalation.
-    """
+    """Full traceback if provided, else 'ExcType: message'. Shown under a 'Technical detail' disclosure."""
     return f"{type(exc).__name__}: {exc}" if not traceback_text else traceback_text

@@ -67,6 +67,7 @@ _DURATIONS_LOCK = threading.Lock()
 
 
 def record_run_duration(phase: str, seconds: float) -> None:
+    """Append a successful run duration to the rolling window for ETA projection."""
     if phase not in _RECENT_DURATIONS:
         return
     with _DURATIONS_LOCK:
@@ -205,6 +206,7 @@ class JobRegistry:
 
 
 def _cleanup_tmpdir(path: Path) -> None:
+    # Best-effort: tmpdir may be locked or already gone; eviction must not raise.
     try:
         if path.exists():
             shutil.rmtree(path, ignore_errors=True)
@@ -283,11 +285,7 @@ def snapshot(record: JobRecord) -> dict[str, Any]:
 def compute_queue_info(record: JobRecord) -> tuple[Optional[int], Optional[int], Optional[float]]:
     """
     Project (queue_position, queue_depth, eta_seconds) for ``record``.
-
-    With MAX_RUN_SLOTS slots, the first MAX_RUN_SLOTS runs go straight to
-    running.  Anyone behind that sits at state="queued"; this function
-    tells the UI roughly how long they'll wait.  Returns (None,…) for
-    already-running records so the UI hides the queue chip.
+    Returns (None,…) for already-running records so the UI hides the chip.
     """
     if record.state != "queued":
         return None, None, None

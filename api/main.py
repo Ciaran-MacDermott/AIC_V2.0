@@ -1,14 +1,21 @@
 """
-FastAPI BFF for the AIC Phase 1 refactor.
+FastAPI BFF for the AIC Phase 1 + Phase 2/3 refactor.
 
-In dev: Next runs on :3000 and hits this on :8000 (CORS allows it).
-In prod: `npm run build` produces web/out/, FastAPI serves it at /, and
-the whole app runs on a single port — same shape as data_ingester.
+Route groups:
+  /api/phase1/runs*         Phase 1 lifecycle (xlsx+csv or zip upload)
+  /api/runs/{id}/qc/*       QC wizard (sheets, edits, finalize)
+  /api/phase2/scan*         Column autodetect + dropdown values
+  /api/phase2/runs*         Phase 2 lifecycle (zip / files / from-parent)
+  /api/runs/{id}/mismatch*  BRAND/TOOL_BRAND review pause + resume
+  /api/post_qc/*            Post-QC re-upload → category-CSV zip
+  /api/runs/{id}            Status / logs / stop / delete / artifacts
+
+In dev: Next runs on :3000, hits the BFF on :8000 (CORS allows it).
+In prod: `npm run build` produces web/out/, FastAPI mounts it at /.
 """
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import pickle
@@ -61,29 +68,23 @@ from api.schemas import (
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     """
-    Graceful-shutdown plumbing.
-
-    On SIGTERM / SIGINT (uvicorn's default reload, container stop, ctrl-c)
-    FastAPI runs the post-yield branch.  We:
-      • signal every running JobRecord to stop and unpark any worker
-        sleeping on resume_event (Phase 2 mismatch review)
-      • give the worker threads a few seconds to observe the stop and
-        let their subprocesses exit cleanly (the subprocess sees
-        SIGTERM and converts it to ExitCode.STOPPED)
-
-    We don't try to wait for every worker to fully drain — uvicorn caps
-    its own grace window — but signalling them lets the most common
-    case (idle slot, pipeline mid-stage) reach a terminal state instead
-    of being torn out from under the analyst.
+    On SIGTERM/SIGINT, signal every active JobRecord to stop and unpark
+    any worker parked on resume_event. We don't wait for full drain
+    (uvicorn caps its own grace window) — signalling lets idle / mid-stage
+    runs reach a terminal state instead of being torn out from under.
     """
     yield
     _signal_running_workers_stop()
 
 
+# Active states + the mismatch-review parked state (which jobs.py
+# deliberately excludes from _ACTIVE_STATES for eviction reasons).
+_SHUTDOWN_SIGNAL_STATES = jobs._ACTIVE_STATES | {"mismatch_pending"}
+
+
 def _signal_running_workers_stop() -> None:
     for record in jobs.registry.list_active():
-        if record.state in {"queued", "running", "finalizing",
-                            "post_qc_running", "mismatch_pending"}:
+        if record.state in _SHUTDOWN_SIGNAL_STATES:
             record.stop_event.set()
             record.resume_event.set()
 
@@ -109,12 +110,16 @@ app.add_middleware(
 )
 
 
-# Upload size guard.  Without this a 5 GB upload reads straight into
-# memory inside the route handler (`await xlsx.read()`) and OOMs the
-# BFF.  200 MB is comfortably above the largest realistic Phase 1
-# input we've seen and well under the per-process headroom.  Override
-# via env var if a workflow ever needs more.
+# Upload size guard. Without this a 5 GB upload reads straight into memory
+# inside the route handler (`await xlsx.read()`) and OOMs the BFF.
 MAX_UPLOAD_BYTES = int(os.environ.get("AIC_MAX_UPLOAD_MB", "200")) * 1024 * 1024
+
+# Excel mime for FileResponse downloads.
+_XLSX_MIMETYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+# Phase 1 output workbook name. Phase 2 / post-QC handoffs look it up at
+# this exact filename in the parent run's tmpdir.
+_PHASE1_OUTPUT_NAME = "File_For_Mapping_QC.xlsx"
 
 
 @app.middleware("http")
@@ -359,7 +364,7 @@ def qc_finalize(run_id: str) -> QcFinalized:
                 sheet_key, payload.dictEnsemble[sheet_key], edits,
             )
 
-        out_path = record.tmpdir / "File_For_Mapping_QC.xlsx"
+        out_path = record.tmpdir / _PHASE1_OUTPUT_NAME
         write_qc_excel(str(out_path), payload, edited_dfs)
         record.output_path = out_path
 
@@ -378,8 +383,8 @@ def download_qc(run_id: str) -> FileResponse:
         raise HTTPException(404, "QC workbook not available (run may have expired)")
     return FileResponse(
         path=str(record.output_path),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename="File_For_Mapping_QC.xlsx",
+        media_type=_XLSX_MIMETYPE,
+        filename=_PHASE1_OUTPUT_NAME,
     )
 
 
@@ -406,15 +411,9 @@ def download_log(run_id: str) -> FileResponse:
 @app.get("/api/runs/{run_id}/artifacts/bundle.zip")
 def download_bundle(run_id: str) -> FileResponse:
     """
-    Archival bundle: every artifact and decision the analyst made on
-    this run, packaged for record-keeping.
-
-    Includes the primary output (xlsx) and the running log; if the run
-    has progressed through QC the per-sheet edits are serialised; for
-    Phase 2 runs the analyst's mismatch corrections are included; if a
-    post-QC re-upload happened the per-category CSVs are nested under
-    post_qc/.  metadata.json captures run identity so a downstream
-    audit can match the bundle back to the run that produced it.
+    Archival bundle: primary output, full log, QC edits, mismatch
+    corrections, post-QC zip (nested), and metadata.json with run identity.
+    Used for audit trail.
     """
     record = jobs.registry.get(run_id)
     if record is None:
@@ -549,7 +548,7 @@ def scan_phase2_from_parent(parent_run_id: str) -> Phase2ScanResult:
     parent = jobs.registry.get(parent_run_id)
     if parent is None:
         raise HTTPException(404, "Parent run not found")
-    qc_path = parent.tmpdir / "File_For_Mapping_QC.xlsx"
+    qc_path = parent.tmpdir / _PHASE1_OUTPUT_NAME
     if not qc_path.is_file():
         raise HTTPException(
             409,
@@ -582,7 +581,7 @@ async def create_phase2_run_from_files(
     project_dir = tmpdir / "extracted"
     project_dir.mkdir()
 
-    (project_dir / "File_For_Mapping_QC.xlsx").write_bytes(await xlsx.read())
+    (project_dir / _PHASE1_OUTPUT_NAME).write_bytes(await xlsx.read())
     (project_dir / "ModelInfo.txt").write_bytes(await model_info.read())
     (project_dir / "Attributes.txt").write_bytes(await attributes.read())
     (project_dir / "AttributeValues.txt").write_bytes(await attribute_values.read())
@@ -599,12 +598,9 @@ async def create_phase2_run_from_parent(
     config:        str = Form(...),
 ) -> RunCreated:
     """
-    Start Phase 2 from a finished Phase 1 run by copying its tmpdir
-    contents (File_For_Mapping_QC.xlsx + any txt files extracted from
-    the original zip) into a fresh tmpdir for the new run.
-
-    Matches the Streamlit handoff path: when Phase 1 ran in zip mode,
-    the same directory feeds Phase 2 without re-uploading.
+    Start Phase 2 from a finished Phase 1 run. Copies the parent's tmpdir
+    contents (QC xlsx + tool txt files) into a fresh tmpdir — matches the
+    legacy handoff path.
     """
     parent = jobs.registry.get(parent_run_id)
     if parent is None:
@@ -615,16 +611,9 @@ async def create_phase2_run_from_parent(
     project_dir = tmpdir / "extracted"
     project_dir.mkdir(parents=True, exist_ok=True)
 
-    # Layout the worker needs at project_dir:
-    #   File_For_Mapping_QC.xlsx — Phase 1 output (lives at parent.tmpdir/)
-    #   ModelInfo.txt + Attributes.txt + AttributeValues.txt — the tool files
-    #     extracted from the original zip into parent.tmpdir/extracted/, possibly
-    #     with one or more wrapper folders inside.
-    #
-    # Previous version did `shutil.copytree(parent.tmpdir, project_dir)`, which
-    # copied the parent's own `extracted/` subdir as a nested `extracted/extracted/`.
-    # phase3_package.pipeline only scans one level deep, so the tool files ended
-    # up hidden and Phase 2 raised FileNotFoundError on ModelInfo.txt.
+    # Layout: QC xlsx at project_dir root, tool txt files alongside.
+    # Earlier shutil.copytree nested extracted/extracted/ which phase3_package's
+    # one-level scan couldn't see — hence the explicit per-item copy below.
     parent_extracted = parent.tmpdir / "extracted"
     copied: list[str] = []
     if parent_extracted.is_dir():
@@ -674,10 +663,10 @@ async def create_phase2_run_from_parent(
     # Phase 1's qc_finalize wrote File_For_Mapping_QC.xlsx to parent.tmpdir/
     # (not into extracted/), so copy it explicitly onto the same level as the
     # tool files.  Done last so it overwrites any stale copy in the zip.
-    parent_qc = parent.tmpdir / "File_For_Mapping_QC.xlsx"
+    parent_qc = parent.tmpdir / _PHASE1_OUTPUT_NAME
     if parent_qc.is_file():
-        shutil.copy2(parent_qc, project_dir / "File_For_Mapping_QC.xlsx")
-        copied.append("File_For_Mapping_QC.xlsx")
+        shutil.copy2(parent_qc, project_dir / _PHASE1_OUTPUT_NAME)
+        copied.append(_PHASE1_OUTPUT_NAME)
 
     record = jobs.registry.create(
         phase="phase2", tmpdir=tmpdir, parent_run_id=parent.run_id,
@@ -769,7 +758,7 @@ def download_phase2_output(run_id: str) -> FileResponse:
     # file without renaming.
     return FileResponse(
         path=str(record.output_path),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        media_type=_XLSX_MIMETYPE,
         filename=record.output_filename or "output.xlsx",
     )
 
@@ -782,20 +771,10 @@ async def post_qc_standalone(
     is_custom_collapse: str = Form("false"),
 ) -> RunCreated:
     """
-    Standalone post-QC re-upload — does not require an existing run.
-
-    The post-QC stage only needs the analyst-edited xlsx + a
-    custom-collapse flag (see phase3_package.run_post_qc); none of the
-    Phase 2 run's pickle/state is read.  A standalone entry point
-    sidesteps two failure modes the run-scoped variant has:
-
-      • the parent run was idle-evicted from the registry (60min TTL)
-      • the BFF was restarted between Phase 2 finishing and the
-        analyst getting back to upload (in-memory registry wipes)
-
-    Either of those would 404 the run-scoped endpoint.  Standalone
-    creates its own JobRecord, runs the worker, and returns the new
-    run_id so the client can poll state and download the zip.
+    Standalone post-QC re-upload. Creates a fresh JobRecord so it survives
+    idle-eviction of the parent Phase 2 run and BFF restarts. Only needs
+    the edited xlsx + custom-collapse flag — no pickle state from the
+    parent run is read.
     """
     _require_xlsx(xlsx)
 
@@ -818,13 +797,9 @@ async def post_qc_standalone(
 async def post_qc_re_upload(run_id: str, xlsx: UploadFile = File(...)) -> PostQcDone:
     """
     Accept an analyst-edited 'Cleaned Output' xlsx and start the post-QC
-    worker.  Mirrors the upload-edited-output flow on the Streamlit page
-    (lines 1416-1469): we save the file into the run's tmpdir, call
-    run_post_qc to re-collapse + split by category, and bundle the
-    resulting CSVs into a zip the user can download.
-
-    The route returns as soon as the worker is started — actual progress
-    is observed via /api/runs/{id} (state=post_qc_running → post_qc_done).
+    worker. Saves the file into the run's tmpdir, calls run_post_qc to
+    re-collapse + split by category, bundles result CSVs into a zip.
+    Progress observed via /api/runs/{id} (post_qc_running → post_qc_done).
     """
     record = jobs.registry.get(run_id)
     if record is None:

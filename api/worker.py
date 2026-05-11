@@ -57,13 +57,8 @@ from api.pipeline_phase2 import (
 from api.run_pipeline import ExitCode
 
 
-# Hard cap on how long a Phase 2 worker will park on resume_event waiting
-# for the analyst to submit mismatch corrections.  After this, we treat
-# the review as abandoned, mark the run as stopped, and let the parked
-# thread exit so the JobRecord becomes evictable by the idle-TTL reaper.
-# One hour covers a reasonable lunch break or a focused meeting; longer
-# than that and the run is almost certainly abandoned (analyst forgot
-# the tab, or stepped away for the day).  Re-uploading is cheap.
+# Hard cap on Phase 2 mismatch-review wait. Past this we mark the run
+# stopped so the JobRecord becomes evictable. Re-uploading is cheap.
 MISMATCH_REVIEW_TIMEOUT_S = 60 * 60
 
 
@@ -152,12 +147,9 @@ def _spawn_pipeline(record: JobRecord, command: str,
                     progress_table: dict[str, float],
                     label_table: dict[str, str]) -> int:
     """
-    Run `python -m api.run_pipeline <command> <tmpdir>` and stream its
-    stdout into record's log buffer.  Returns the subprocess exit code.
-
-    Honours record.stop_event by sending SIGTERM (the child catches it
-    and exits 99).  Survives monkeypatch via the AIC_INPROCESS escape
-    hatch — tests use the in-process branch where the legacy code lives.
+    Spawn ``python -m api.run_pipeline <command> <tmpdir>`` and stream stdout
+    into record's log. Returns subprocess exit code. Honours stop_event via
+    SIGTERM (child catches and exits ExitCode.STOPPED).
     """
     # text=True defaults to the locale encoding (cp1252 on Windows), which
     # crashes on checkmarks/box-drawing chars the pipeline emits.  Pin to
@@ -206,12 +198,9 @@ def _spawn_pipeline(record: JobRecord, command: str,
             pass
 
     rc = proc.wait()
-    # On Windows proc.terminate() calls TerminateProcess (not SIGTERM), so
-    # the subprocess dies with exit code 1 before its signal handler can
-    # convert the stop into ExitCode.STOPPED.  If the user clicked Stop,
-    # honour that intent regardless of how the OS reaped the process —
-    # otherwise the analyst sees a "Server error / Pipeline failed"
-    # dialog for what they explicitly cancelled.
+    # On Windows proc.terminate() calls TerminateProcess (no SIGTERM), so the
+    # child can't translate the stop into ExitCode.STOPPED. Honour user
+    # intent if stop_event was set, regardless of how the OS reaped the proc.
     if rc != ExitCode.OK and record.stop_event.is_set():
         return ExitCode.STOPPED
     return rc
@@ -233,6 +222,9 @@ def _classify_subprocess_error(record: JobRecord) -> tuple[str, Optional[str], O
     except Exception:
         exc = RuntimeError("Pipeline subprocess failed; see log for details.")
     friendly = classify(exc)
+    # __traceback__ doesn't survive pickle, so format_exception mostly
+    # yields 'Type: msg' here. The full traceback was printed to stdout
+    # by the child and is already in record.log_lines.
     tb = "".join(traceback.format_exception(type(exc), exc, getattr(exc, "__traceback__", None))) or str(exc)
     return tb, friendly.title, friendly.advice, friendly.category
 
@@ -312,12 +304,9 @@ def _execute_phase1(record: JobRecord, excel_path: str, csv_path: str) -> Any:
 
 def _attach_phase1_payload(record: JobRecord, payload: Any) -> None:
     """
-    QC review touches `dictEnsemble` (one DataFrame per attribute) on
-    every sheet fetch, so we keep that in memory for fast access.
-    FINAL / FLAT_FILE_OUT / meta are full-data DataFrames only used
-    once at finalize; spilling them to disk avoids pinning ~200 MB
-    per concurrent QC review in the parent FastAPI process.  With 5
-    analysts each in a multi-hour review, that adds up fast.
+    Split payload: keep dictEnsemble in memory for QC review; spill
+    FINAL / FLAT_FILE_OUT / meta to disk. Avoids pinning ~200 MB per
+    concurrent QC review in the parent FastAPI process.
     """
     heavy_path = record.tmpdir / "phase1_heavy.pkl"
     with open(heavy_path, "wb") as f:
@@ -461,11 +450,9 @@ def run_phase2_worker(record: JobRecord, directory_path: str,
 
 def _wait_for_mismatch_resolve(record: JobRecord) -> float:
     """
-    Park on resume_event until the analyst submits corrections (or
-    MISMATCH_REVIEW_TIMEOUT_S elapses, or stop_event fires).  Returns
-    seconds spent waiting so the caller can subtract it from the run
-    duration recorded for ETA.  Side-effect: sets state=stopped on
-    timeout or stop.
+    Park on resume_event until corrections submitted, timeout elapses,
+    or stop_event fires. Returns seconds waited so the caller can subtract
+    from ETA duration. Sets state=stopped on timeout/stop.
     """
     review_started = time.time()
     resumed = record.resume_event.wait(timeout=MISMATCH_REVIEW_TIMEOUT_S)
@@ -504,26 +491,16 @@ class _PipelineErrored(Exception):
 
 
 class _PhaseAborted(Exception):
-    """
-    Internal sentinel raised by _capture_phase_errors after it has
-    already transitioned the record into a terminal state.  The
-    surrounding worker just needs to unwind — the user-facing state
-    was set inside the context manager.
-    """
+    """Raised by _capture_phase_errors after recording the terminal state — surrounding worker just unwinds."""
 
 
 @contextmanager
 def _capture_phase_errors(record: JobRecord):
     """
-    Convert the standard pipeline-failure exceptions into a state
-    transition, then re-raise as _PhaseAborted so the surrounding
-    worker can unwind cleanly.  The stop / error / unexpected branches
-    each have one canonical recording helper, so adding a new failure
-    mode means editing one place, not three.
-
-    _MismatchSurfaced is a control-flow signal (Phase A's documented
-    "needs user review" path), not an error — let it propagate so the
-    surrounding worker can park the run on resume_event.
+    Convert pipeline-failure excs into a state transition + raise
+    _PhaseAborted so the worker unwinds cleanly. _MismatchSurfaced is
+    control flow (not error) — let it propagate so the worker can park
+    on resume_event.
     """
     try:
         yield
