@@ -25,10 +25,11 @@ from typing import Optional
 # pages/2_Phase_3_Pipeline_and_QC.py — change in lock-step.
 _UPC_PRIORITY = ["RAW_BRAND", "RAW_TRADEMARK", "RAW_SUB_BRAND", "RAW_US_TRADEMARK"]
 _MFR_PRIORITY = ["RAW_MANUFACTURER", "RAW_PARENT", "RAW_US_PARENT"]
-# Parent priority is distinct from manufacturer: the dialog and the
-# private-label retailer detection both want the column whose values are
-# retailer-shaped (e.g. "CVS PHARMACY"), not the manufacturer name.
-_PARENT_PRIORITY = ["RAW_PARENT", "RAW_US_PARENT", "RAW_MANUFACTURER"]
+# PL detection + the BRAND-vs-TOOL_BRAND mismatch dialog want the column
+# whose values look like retailers (e.g. "CVS PHARMACY"). In current
+# Circana data that's RAW_MANUFACTURER; RAW_PARENT / RAW_US_PARENT are
+# fallbacks for older project shapes.
+_PARENT_PRIORITY = ["RAW_MANUFACTURER", "RAW_PARENT", "RAW_US_PARENT"]
 
 
 class InputError(ValueError):

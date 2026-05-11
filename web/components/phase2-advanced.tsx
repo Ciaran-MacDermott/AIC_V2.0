@@ -148,8 +148,9 @@ export function Phase2AdvancedConfig({
               />
             )}
             <span className="block mt-1 text-[11px] text-zinc-500">
-              Pick the column with retailer/parent values (e.g. RAW_PARENT) so private-label
-              retailers like CVS surface in the mismatch dialog.
+              Pick the column whose values look like retailers (e.g. RAW_MANUFACTURER for
+              current data; RAW_PARENT in older projects) so private-label retailers like CVS
+              surface in the mismatch dialog.
             </span>
           </label>
         </section>

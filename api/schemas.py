@@ -136,10 +136,11 @@ class BrandOverrideConfig(BaseModel):
     raw_manufacturer_col: str  = "RAW_MANUFACTURER"
     # Drives Step 5 private-label retailer detection (apply_private_label_rules)
     # AND the PARENT column rendered in the BRAND-vs-TOOL_BRAND mismatch
-    # dialog (Step 13).  Split from raw_manufacturer_col so analysts who
-    # need to surface retailer values (e.g. "CVS PHARMACY") in the dialog
-    # don't break manufacturer-side cleanup by changing one shared field.
-    raw_parent_col:       str  = "RAW_PARENT"
+    # dialog (Step 13).  In current Circana data the retailer-shaped values
+    # live in RAW_MANUFACTURER; RAW_PARENT is kept as a fallback for older
+    # project shapes.  Split from raw_manufacturer_col so analysts who pick
+    # a different column for one role don't disturb the other.
+    raw_parent_col:       str  = "RAW_MANUFACTURER"
     rules:                list[BrandOverrideRule] = []
     # Note: brand_col / tool_brand_col were dropped — the brand pair is
     # resolved per-model at runtime from each Attributes.txt's

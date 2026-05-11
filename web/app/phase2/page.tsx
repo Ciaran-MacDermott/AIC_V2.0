@@ -43,7 +43,7 @@ function defaultBrandOverride(): BrandOverrideConfig {
   return {
     enable: true,
     raw_manufacturer_col: "RAW_MANUFACTURER",
-    raw_parent_col: "RAW_PARENT",
+    raw_parent_col: "RAW_MANUFACTURER",
     rules: [],
   };
 }
