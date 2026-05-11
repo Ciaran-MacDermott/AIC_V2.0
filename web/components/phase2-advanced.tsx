@@ -1,13 +1,19 @@
 "use client";
 
 // Advanced Phase 2 configuration disclosure: private-label rules (per-retailer
-// enable + label + parent column) and Client Brand override rules. The
-// brand/tool_brand pair itself is resolved from Attributes.txt at run time,
+// enable + label + retailer-identifier column) and Client Brand override rules.
+// The brand/tool_brand pair itself is resolved from Attributes.txt at run time,
 // so the only column-picker here is the manufacturer column.
 
-import type { BrandOverrideConfig, Phase2ScanResult, PrivateLabelRule } from "@/lib/types";
+import type { BrandOverrideConfig, Phase2ScanResult } from "@/lib/types";
 
-export type PrivateLabelRules = Record<string, PrivateLabelRule>;
+// Row-shaped private-label rule. Parent state holds these as an array (stable
+// React keys, easy add/remove) and converts to Record<retailer, …> at submit.
+export type PrivateLabelRow = {
+  retailer: string;
+  enabled:  boolean;
+  label:    string;
+};
 
 // Row-shaped override rule; one row → one single-element BrandOverrideRule on submit.
 export type BrandOverrideRow = {
@@ -21,8 +27,8 @@ export function Phase2AdvancedConfig({
   onToggle,
   scan,
 
-  privateLabelRules,
-  setPrivateLabelRules,
+  privateLabelRows,
+  setPrivateLabelRows,
 
   brandOverride,
   setBrandOverride,
@@ -34,8 +40,8 @@ export function Phase2AdvancedConfig({
   onToggle: () => void;
   scan: Phase2ScanResult | null;
 
-  privateLabelRules: PrivateLabelRules;
-  setPrivateLabelRules: (next: PrivateLabelRules) => void;
+  privateLabelRows: PrivateLabelRow[];
+  setPrivateLabelRows: (next: PrivateLabelRow[]) => void;
 
   brandOverride: BrandOverrideConfig;
   setBrandOverride: (next: BrandOverrideConfig) => void;
@@ -68,63 +74,110 @@ export function Phase2AdvancedConfig({
 
       <div className="px-4 pb-4 space-y-10 border-t border-zinc-100 pt-4">
         {/* ── Private Label Rules ─────────────────────────────────────── */}
-        <section className="space-y-2">
-          <div className="text-sm font-semibold text-brand-700">Private label rules</div>
-          <p className="text-xs text-zinc-500">
-            For each retailer, choose whether private label restricted is enabled
-            and what the label should be.
-          </p>
-          <table className="w-full text-sm">
-            <thead className="bg-zinc-50 text-zinc-600 text-xs uppercase tracking-wide">
-              <tr>
-                <th className="px-3 py-2 text-left">Retailer</th>
-                <th className="px-3 py-2 text-left">Enabled</th>
-                <th className="px-3 py-2 text-left">Label</th>
-              </tr>
-            </thead>
-            <tbody>
-              {Object.entries(privateLabelRules).map(([retailer, rule]) => (
-                <tr key={retailer} className="border-t border-zinc-100">
-                  <td className="px-3 py-2 text-xs">{retailer}</td>
-                  <td className="px-3 py-2">
-                    <input
-                      type="checkbox"
-                      checked={rule.enabled}
-                      onChange={(e) =>
-                        setPrivateLabelRules({
-                          ...privateLabelRules,
-                          [retailer]: { ...rule, enabled: e.target.checked },
-                        })
-                      }
-                    />
-                  </td>
-                  <td className="px-3 py-2">
-                    <input
-                      type="text"
-                      value={rule.label}
-                      disabled={!rule.enabled}
-                      onChange={(e) =>
-                        setPrivateLabelRules({
-                          ...privateLabelRules,
-                          [retailer]: { ...rule, label: e.target.value },
-                        })
-                      }
-                      className="border border-zinc-300 rounded px-2 py-1 text-xs w-full disabled:bg-zinc-100"
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <section className="space-y-3">
+          <div>
+            <div className="text-sm font-semibold text-brand-700">Private label rules</div>
+            <p className="text-xs text-zinc-500 mt-0.5">
+              Per-retailer enable + label. Defaults cover walmart / cvs / heb — add
+              rows for any other retailers your project needs.
+            </p>
+          </div>
 
-          {/* Parent column — drives PL retailer detection (Step 5) and the
-              PARENT column rendered in the BRAND-vs-TOOL_BRAND mismatch
-              dialog (Step 13).  Lives in the Private Label section because
-              that's where its effect shows up; kept separate from the
-              brand-override rule editor so swapping it doesn't surprise
-              the analyst into losing PL/CVS visibility. */}
-          <label className="block text-xs text-zinc-600">
-            <span className="block mb-1">Parent column (PL detection + mismatch dialog)</span>
+          {/* Row-shaped editor — mirrors the Client Brand rules below.
+              Retailer name is editable so analysts can rename / fix typos
+              without removing and re-adding. */}
+          <div className="space-y-2">
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_5rem_1fr_2.5rem] gap-3 text-[11px] text-zinc-500 font-medium">
+              <div>Retailer</div>
+              <div>Enabled</div>
+              <div>Label</div>
+              <div />
+            </div>
+
+            <div className="space-y-1.5">
+              {privateLabelRows.map((row, i) => (
+                <div
+                  key={i}
+                  className="grid grid-cols-1 md:grid-cols-[1fr_5rem_1fr_2.5rem] gap-3 items-center"
+                >
+                  <input
+                    type="text"
+                    value={row.retailer}
+                    placeholder="retailer (e.g. target)"
+                    onChange={(e) =>
+                      setPrivateLabelRows(
+                        privateLabelRows.map((r, j) =>
+                          j === i ? { ...r, retailer: e.target.value } : r,
+                        ),
+                      )
+                    }
+                    className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
+                  />
+                  <input
+                    type="checkbox"
+                    checked={row.enabled}
+                    onChange={(e) =>
+                      setPrivateLabelRows(
+                        privateLabelRows.map((r, j) =>
+                          j === i ? { ...r, enabled: e.target.checked } : r,
+                        ),
+                      )
+                    }
+                  />
+                  <input
+                    type="text"
+                    value={row.label}
+                    disabled={!row.enabled}
+                    onChange={(e) =>
+                      setPrivateLabelRows(
+                        privateLabelRows.map((r, j) =>
+                          j === i ? { ...r, label: e.target.value } : r,
+                        ),
+                      )
+                    }
+                    className="border border-zinc-300 rounded px-2 py-1 text-xs w-full disabled:bg-zinc-100"
+                  />
+                  <button
+                    type="button"
+                    aria-label="Remove retailer"
+                    onClick={() => {
+                      // Keep at least one row visible so the editor is
+                      // always primed (mirrors the brand-override editor).
+                      const rest = privateLabelRows.filter((_, j) => j !== i);
+                      setPrivateLabelRows(
+                        rest.length > 0
+                          ? rest
+                          : [{ retailer: "", enabled: true, label: "PRIVATE LABEL RESTRICTED" }],
+                      );
+                    }}
+                    className="justify-self-end text-base leading-none text-zinc-400 hover:text-err px-1"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() =>
+                setPrivateLabelRows([
+                  ...privateLabelRows,
+                  { retailer: "", enabled: true, label: "PRIVATE LABEL RESTRICTED" },
+                ])
+              }
+              className="text-xs text-brand-700 hover:text-brand-900 underline"
+            >
+              + Add retailer
+            </button>
+          </div>
+
+          {/* Retailer-identifier column — drives PL detection (Step 5) and
+              the PARENT column rendered in the BRAND-vs-TOOL_BRAND mismatch
+              dialog (Step 13). Lives in the PL section because that's
+              where its effect shows up. */}
+          <label className="block text-xs text-zinc-600 pt-2">
+            <span className="block mb-1">Retailer identifier col</span>
             {scan && scan.raw_parent_columns.length > 0 ? (
               <select
                 value={brandOverride.raw_parent_col}
@@ -148,9 +201,7 @@ export function Phase2AdvancedConfig({
               />
             )}
             <span className="block mt-1 text-[11px] text-zinc-500">
-              Pick the column whose values look like retailers (e.g. RAW_MANUFACTURER for
-              current data; RAW_PARENT in older projects) so private-label retailers like CVS
-              surface in the mismatch dialog.
+              Column whose values identify the retailer (e.g. RAW_MANUFACTURER).
             </span>
           </label>
         </section>
@@ -217,9 +268,6 @@ export function Phase2AdvancedConfig({
                 className="border border-zinc-300 rounded px-2 py-1 text-xs w-full"
               />
             )}
-            <span className="block mt-1 text-[11px] text-zinc-500">
-              Used only to match each rule's manufacturer values — separate from the Parent column above.
-            </span>
           </label>
 
           {/* Row-shaped rules editor — mirrors Streamlit's data_editor.

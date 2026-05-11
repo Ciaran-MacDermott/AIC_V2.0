@@ -12,7 +12,7 @@ import { api } from "@/lib/api";
 import type {
   BrandOverrideConfig,
   JobStatus, MismatchCorrection, MismatchGroup,
-  Phase2Config, Phase2ScanResult,
+  Phase2Config, Phase2ScanResult, PrivateLabelRule,
 } from "@/lib/types";
 import { Header } from "@/components/header";
 import { FileSlot } from "@/components/upload";
@@ -24,16 +24,16 @@ import { RunErrorDialog } from "@/components/run-error-dialog";
 import {
   Phase2AdvancedConfig,
   type BrandOverrideRow,
-  type PrivateLabelRules,
+  type PrivateLabelRow,
 } from "@/components/phase2-advanced";
 
 
-function defaultPlRules(): PrivateLabelRules {
-  return {
-    walmart: { enabled: true,  label: "PRIVATE LABEL RESTRICTED" },
-    cvs:     { enabled: true,  label: "PRIVATE LABEL EXCLUDE" },
-    heb:     { enabled: false, label: "PRIVATE LABEL RESTRICTED" },
-  };
+function defaultPlRows(): PrivateLabelRow[] {
+  return [
+    { retailer: "walmart", enabled: true,  label: "PRIVATE LABEL RESTRICTED" },
+    { retailer: "cvs",     enabled: true,  label: "PRIVATE LABEL EXCLUDE" },
+    { retailer: "heb",     enabled: false, label: "PRIVATE LABEL RESTRICTED" },
+  ];
 }
 
 // Brand-override rules are submitted every run; empty rules is a pipeline
@@ -79,7 +79,7 @@ function Phase2Page() {
   const [scanning, setScanning] = useState(false);
 
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
-  const [plRules, setPlRules] = useState<PrivateLabelRules>(defaultPlRules);
+  const [plRows, setPlRows] = useState<PrivateLabelRow[]>(defaultPlRows);
   const [brandOverride, setBrandOverride] = useState<BrandOverrideConfig>(defaultBrandOverride);
   // Always start with one empty row so the editor is primed and the
   // dropdowns are visible — analysts run override rules every project.
@@ -121,8 +121,8 @@ function Phase2Page() {
         if (cancelled) return;
         setScan(s);
         setRawUpcCol(s.default_upc_col || "RAW_BRAND");
-        // Pre-fill manufacturer + parent column pickers from the autodetect
-        // so the analyst doesn't have to set them manually on every run.
+        // Pre-fill the manufacturer + retailer-identifier column pickers from
+        // the autodetect so the analyst doesn't have to set them every run.
         setBrandOverride((prev) => ({
           ...prev,
           ...(s.default_manufacturer_col && { raw_manufacturer_col: s.default_manufacturer_col }),
@@ -277,9 +277,19 @@ function Phase2Page() {
         brand_overrides: { [r.from_brand]: r.to_tool_brand },
       }));
 
+    // Convert the row-shaped editor state back into the Record the backend
+    // expects. Empty retailer strings are dropped; if two rows share a
+    // retailer name, the later one wins.
+    const private_label_config = plRows
+      .filter((r) => r.retailer.trim())
+      .reduce<Record<string, PrivateLabelRule>>((acc, r) => {
+        acc[r.retailer.trim()] = { enabled: r.enabled, label: r.label };
+        return acc;
+      }, {});
+
     return {
       raw_upc_pl_brand_col:  rawUpcCol,
-      private_label_config:  plRules,
+      private_label_config,
       brand_override_config: { ...brandOverride, enable: true, rules },
       is_custom_collapse:    customCollapse,
       skip_rmrr:             skipRmrr,
@@ -490,8 +500,8 @@ function Phase2Page() {
             expanded={advancedExpanded}
             onToggle={() => setAdvancedExpanded(!advancedExpanded)}
             scan={scan}
-            privateLabelRules={plRules}
-            setPrivateLabelRules={setPlRules}
+            privateLabelRows={plRows}
+            setPrivateLabelRows={setPlRows}
             brandOverride={brandOverride}
             setBrandOverride={setBrandOverride}
             brandOverrideRows={brandOverrideRows}
