@@ -105,7 +105,11 @@ def run_phase1(excel_path: str, csv_path: str,
             raise RuntimeError(f"META sheet missing column: '{col}'")
 
     metaGridPDF_old = metaGridPDF.copy()
-    metaGridPDF     = metaGridPDF[metaGridPDF["Attribute_Type"] == "MODELING"]
+    # Case-insensitive match: META sheets export Attribute_Type as "Modeling"/
+    # "Reporting" (title case), not "MODELING". Strip + upper before comparing.
+    metaGridPDF     = metaGridPDF[
+        metaGridPDF["Attribute_Type"].astype(str).str.strip().str.upper() == "MODELING"
+    ]
     metaFields      = list(set(
         list(metaGridPDF["Attribute Name in MDM"].unique()) +
         list(metaGridPDF["Attribute Group name"].unique())
