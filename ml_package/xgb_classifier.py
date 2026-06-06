@@ -107,6 +107,16 @@ _tfidf = TfidfVectorizer(ngram_range=(1, 2), min_df=1, sublinear_tf=True, analyz
 # Number of candidate labels XGB returns per product — mirrors _BM25_TOP_K.
 _XGB_TOP_K = 3
 
+# High-cardinality cutoff. XGBoost multiclass cost scales with the class count
+# (it trains ~ n_classes * n_estimators trees), so a label column with thousands
+# of distinct values dominates the stage for little gain. Above this many distinct
+# label values XGB is skipped and the attribute is carried by Lookup + BM25.
+# Set to 500 -- between the TH dataset's 263 and 2,795 cardinality clusters -- so it
+# skips the Franchise_Packtype_RPTG identity field (~2,795 values, the ~40-min fit)
+# but KEEPS XGB for Tool_Franchise_TH (~263): a 2026-06-06 holdout test showed XGB
+# beats BM25 by ~92pp on that attribute's genuinely-new (Lookup-miss) products.
+_XGB_MAX_CLASSES = 500
+
 # subsample=0.8: row subsampling reduces overfitting.
 # colsample_bytree=0.4: column subsampling for sparse TF-IDF features.
 # tree_method='hist': faster histogram splits on sparse matrices.
@@ -222,6 +232,14 @@ def _process_one_xgb_attr(mdm_col: str, meta_df: pd.DataFrame,
         return None
 
     try:
+        # High-cardinality guard: skip XGB when the label column has more distinct
+        # values than _XGB_MAX_CLASSES — Lookup + BM25 carry the attribute instead.
+        n_distinct = int(history_df.loc[history_df[mdm_col].notna(), mdm_col].nunique())
+        if n_distinct > _XGB_MAX_CLASSES:
+            print(f"  XGB      {mdm_col}: skipped — {n_distinct} distinct values "
+                  f"exceeds cap of {_XGB_MAX_CLASSES} (routed via Lookup + BM25)")
+            return None
+
         train_df = (
             history_df[attr_key_cols + [mdm_col]]
             .replace(r'(OZ|LB)', ' ', regex=True)
