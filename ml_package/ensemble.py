@@ -433,22 +433,23 @@ def runEnsemble(recom_dict: dict, meta_df: pd.DataFrame,
         lookup_df = pd.merge(lookup_df, split_parent_df, on=attr_key_cols, how='left')
 
         # ── QC Priority ───────────────────────────────────────────────────
-        # HIGH   → needs review.  Weak match (<80) OR methods disagree.
-        # MEDIUM → worth a glance.  Exact (100) but ML disagrees, OR
-        #          strong fuzzy (≥80) with ML agreement.
-        # LOW    → safe to skip.  Exact (100) AND ML confirms (or no ML —
-        #          meaning the value was already populated in the source).
+        # LOW    → safe to skip.  Exact (score 100) lookup match — the historical
+        #          mapping is authoritative, so it's trusted even when the
+        #          (generalising) ML disagrees.  ML's alternative is still kept
+        #          in the 'ML Matches Lookup' column for optional spot-checking.
+        # MEDIUM → worth a glance.  Strong fuzzy match (>=80) confirmed by ML.
+        # HIGH   → needs review.  Everything else (weak/no match, or a fuzzy
+        #          match the ML doesn't confirm).
         is_exact_match  = lookup_df['score'] >= 100
         is_strong_match = lookup_df['score'] >= 80
         agrees          = lookup_df['MatchFlag'] == 1
 
         lookup_df['QC Priority'] = np.select(
             [
-                is_exact_match & (agrees | ~has_ml_prediction),
-                is_exact_match & has_ml_prediction & ~agrees,
-                is_strong_match & agrees,
+                is_exact_match,                 # exact lookup match → trusted (LOW)
+                is_strong_match & agrees,       # strong fuzzy + ML confirms → MEDIUM
             ],
-            ['LOW', 'MEDIUM', 'MEDIUM'],
+            ['LOW', 'MEDIUM'],
             default='HIGH',
         )
 
@@ -539,7 +540,15 @@ def runEnsemble(recom_dict: dict, meta_df: pd.DataFrame,
         summary_parts     = [f'exact {exact_match_count}/{exact_total}', f'fuzzy {fuzzy_match_count}/{fuzzy_total}']
         if fallback_count:
             summary_parts.append(f'{fallback_count} new (fallback)')
-        print(f"  Done     {attr_col}: ML agree — {' | '.join(summary_parts)}  [{type_label}]")
+        if has_ml_prediction.any():
+            # ML ran for this attribute — report ML-vs-Lookup agreement.
+            print(f"  Done     {attr_col}: ML agree — {' | '.join(summary_parts)}  [{type_label}]")
+        else:
+            # No ML ran (routed to Lookup / numeric-suppressed) — a "ML agree 0/N"
+            # line here is misleading, so report the lookup outcome instead.
+            _newp = f', {fallback_count} new' if fallback_count else ''
+            print(f"  Done     {attr_col}: resolved by lookup — no ML applied "
+                  f"({exact_total} exact, {fuzzy_total} fuzzy{_newp})  [{type_label}]")
 
         # Only include Note column when at least one row has a note.
         note_cols = ['Note'] if note.str.strip().any() else []
