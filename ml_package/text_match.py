@@ -49,6 +49,8 @@ from nltk.corpus import stopwords
 from rank_bm25 import BM25Plus
 from sklearn.preprocessing import MinMaxScaler
 
+from ml_package import routing
+
 # Number of candidate labels BM25 returns per product.
 # Score-level fusion in Ensemble sums each method's normalised scores across
 # all K candidates before taking argmax, so agreement on a label that appears
@@ -204,6 +206,14 @@ def _process_one_bm25_attr(mdm_col: str, meta_df: pd.DataFrame,
         return None
     if _is_numeric_attr(attr_key_cols, history_df):
         print(f"  BM25     {mdm_col}: skipped — auto-detected as numeric/range")
+        return None
+
+    # Routing: skip BM25 for identity/derived composites (openness ~ 1) and
+    # pathological label spaces — Lookup carries them, and BM25's dense
+    # [n_products x n_labels] score matrix is a memory hazard on huge label sets.
+    skip, _ = routing.skip_learned_methods(history_df, attr_key_cols, mdm_col)
+    if skip:
+        print(f"  BM25     {mdm_col}: skipped — resolved by lookup (no modelling needed)")
         return None
 
     training_corpus = _build_training_corpus(history_df, meta_df, mdm_col)

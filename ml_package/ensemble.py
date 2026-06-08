@@ -261,10 +261,10 @@ def runEnsemble(recom_dict: dict, meta_df: pd.DataFrame,
 
         elif not skip_ml:
             # TEXT: collect ML results for this attribute using exact key names.
-            # Only 'BM25_{attr_col}', 'XGB_{attr_col}', and 'VOCAB_{attr_col}'
+            # Only 'BM25_{attr_col}', 'ML_{attr_col}', and 'VOCAB_{attr_col}'
             # are valid ML keys — the old endswith() approach incorrectly matched
             # superset names (e.g. 'BM25_TOOL_BRAND' when processing 'BRAND').
-            for method_name in ('BM25', 'XGB', 'VOCAB'):
+            for method_name in ('BM25', 'ML', 'VOCAB'):
                 key = f'{method_name}_{attr_col}'
                 if key not in recom_dict:
                     continue
@@ -293,7 +293,7 @@ def runEnsemble(recom_dict: dict, meta_df: pd.DataFrame,
             # ── Normalised score for tiebreaking clashes ──────────────────
             # Extract before stripping columns. Both are mapped to [0, 1]:
             #   BM25 → prob_score (already min-max scaled per attribute)
-            #   XGB  → score / 100  (predict_proba output × 100)
+            #   ML   → score / 100  (classifier confidence × 100; softmax for LinearSVC)
             # Any future method without a recognised score column gets 0.0
             # and will lose any tiebreak against a method that does.
             # Build per-row normalised score using np.where — avoids .loc
@@ -317,7 +317,7 @@ def runEnsemble(recom_dict: dict, meta_df: pd.DataFrame,
             ml_results = ml_results.assign(
                 _norm_score=np.where(
                     ml_results['method'] == 'BM25', _bm25_scores,
-                    np.where(ml_results['method'] == 'XGB', _xgb_scores,
+                    np.where(ml_results['method'] == 'ML', _xgb_scores,
                     np.where(ml_results['method'] == 'VOCAB', 1.0, 0.0)),
                 )
             )

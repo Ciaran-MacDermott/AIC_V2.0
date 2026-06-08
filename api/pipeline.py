@@ -21,7 +21,7 @@ import pandas as pd
 from ml_package import ensemble as _ens
 from ml_package import mapping_lookup as _ml
 from ml_package import text_match as _tm
-from ml_package import xgb_classifier as _rfx
+from ml_package import ml_classifier as _rfx
 from ml_package.write_results import write_results
 
 
@@ -38,11 +38,19 @@ STAGE_PROGRESS = {
 STAGE_LABELS = {
     "read inputs":   "Reading & validating input files…",
     "mappinglookup": "Running exact & fuzzy lookup matching…",
-    "textmatch":     "Running BM25 + XGBoost in parallel (ML corroboration)…",
-    "ensemble":      "Combining lookup, BM25 and ML scores via ensemble…",
+    "textmatch":     "Predicting attributes for unresolved products (lookup + ML)…",
+    "ensemble":      "Combining lookup + ML results and assigning QC priority…",
     "qc_ready":      "Pipeline complete — QC review ready",
     "write output":  "Writing output Excel workbook…",
     "done":          "Done",
+}
+
+# Pre-flight coverage check (Lookup-only) progress + labels. Same banner keys
+# as the full run so the worker's _LogStream can drive the bar.
+PRECHECK_PROGRESS = {"read inputs": 0.20, "mappinglookup": 0.80}
+PRECHECK_LABELS = {
+    "read inputs":   "Reading inputs…",
+    "mappinglookup": "Checking lookup coverage…",
 }
 
 
@@ -90,6 +98,13 @@ def run_phase1(excel_path: str, csv_path: str,
     print(f"  Reading CSV: {os.path.basename(csv_path)}")
     attrGridPDF    = pd.read_csv(csv_path, low_memory=False)
     print(f"  Loaded — META {metaGridPDF.shape} | FINAL {combinedAMPPDF.shape} | CSV {attrGridPDF.shape}")
+
+    # Strip '|' (pipe) from DESCRIPTION — some client submission systems treat it
+    # as a delimiter and reject the file. Replace with a space so adjacent words
+    # don't merge.
+    for _df in (combinedAMPPDF, attrGridPDF):
+        if "DESCRIPTION" in _df.columns:
+            _df["DESCRIPTION"] = _df["DESCRIPTION"].astype(str).str.replace("|", " ", regex=False).str.strip()
 
     FINAL   = combinedAMPPDF.copy()
     SAL_COL = "RAW_TOTAL_DOLLARS"
@@ -145,7 +160,7 @@ def run_phase1(excel_path: str, csv_path: str,
 
     # ── BM25 + XGBoost in parallel ────────────────────────────────────────
     print("START textmatch")
-    print("  BM25 + XGBoost — for products not resolved by lookup, BM25 ranks candidates by keyword relevance while XGBoost applies a tree-based classifier trained on historical labels. Both run in parallel.")
+    print("  For products not resolved by lookup, predicting attributes from patterns in your historical data (lookup + ML)…")
     _dictRecom_tm: dict = {}
     _dictRecom_ml: list = [None]
 
@@ -185,6 +200,108 @@ def run_phase1(excel_path: str, csv_path: str,
         meta=metaGridPDF_old,
         dictEnsemble=dictEnsemble,
     )
+
+
+def _raise_if_stopped(stop_event: Optional[threading.Event]) -> None:
+    if stop_event is not None and stop_event.is_set():
+        raise PipelineStopped()
+
+
+def _extract_coverage_gaps(recom_dict: dict, sample_cap: int = 25) -> list[dict]:
+    """
+    Derive coverage gaps from the Lookup tables: rows written blank with
+    score 0 are flat-file key combos that found no historical match (the
+    exact condition _build_lookup_table reports). Returns one entry per
+    affected attribute, busiest first.
+    """
+    gaps: list[dict] = []
+    for key, lkp in recom_dict.items():
+        if not key.startswith("Lookup_") or not hasattr(lkp, "columns"):
+            continue
+        attr = key[len("Lookup_"):]
+        if attr not in lkp.columns or "score" not in lkp.columns:
+            continue
+        key_cols = [c for c in lkp.columns if c not in (attr, "score", "Rank", "Record")]
+        if not key_cols:
+            continue
+        total_combos = int(lkp[key_cols].drop_duplicates().shape[0])
+        value = lkp[attr].astype(str).str.strip()
+        score = pd.to_numeric(lkp["score"], errors="coerce")
+        gap_rows = lkp.loc[(value == "") & (score == 0), key_cols].drop_duplicates()
+        if gap_rows.empty:
+            continue
+        combos = [
+            ", ".join(f"{c}={str(row[c])!r}" for c in key_cols)
+            for _, row in gap_rows.iterrows()
+        ]
+        gaps.append({
+            "attribute":     attr,
+            "key_columns":   list(key_cols),
+            "count":         int(len(gap_rows)),     # unmatched (unseen-value) combos
+            "total_combos":  total_combos,           # total distinct flat-file combos for the attr
+            "sample_combos": combos[:sample_cap],
+        })
+    gaps.sort(key=lambda g: g["count"], reverse=True)
+    return gaps
+
+
+def run_coverage_check(excel_path: str, csv_path: str,
+                       stop_event: Optional[threading.Event] = None) -> list[dict]:
+    """
+    Pre-flight gate: run ONLY the Lookup stage and report attributes whose
+    flat-file key combos have no historical match — the cheap (~1 min) signal
+    that lets the UI warn the analyst and offer continue/cancel BEFORE the full
+    multi-minute run. Mirrors run_phase1's input prep so the gate sees exactly
+    what the real run will. Returns [{attribute, key_columns, count, sample_combos}].
+    """
+    print("START read inputs")
+    print(f"  Reading Excel: {os.path.basename(excel_path)}")
+    wb          = openpyxl.load_workbook(excel_path, read_only=True)
+    sheet_names = wb.sheetnames
+    wb.close()
+    meta_sheet  = next((s for s in sheet_names if "META"  in s.upper()), None)
+    final_sheet = next((s for s in sheet_names if "FINAL" in s.upper()), None)
+    if not meta_sheet or not final_sheet:
+        raise RuntimeError(
+            f"Workbook needs META and FINAL sheets. Found: {sheet_names}"
+        )
+    metaGridPDF    = pd.read_excel(excel_path, sheet_name=meta_sheet)
+    combinedAMPPDF = pd.read_excel(excel_path, sheet_name=final_sheet)
+    attrGridPDF    = pd.read_csv(csv_path, low_memory=False)
+    print("DONE read inputs")
+    _raise_if_stopped(stop_event)
+
+    # Mirror run_phase1's prep: filter META to MODELING, string-coerce all
+    # frames, and derive TOTAL_UNIT_SALES so runLookup ranks by sales volume.
+    SAL_COL = "RAW_TOTAL_DOLLARS"
+    if SAL_COL not in combinedAMPPDF.columns:
+        SAL_COL = next((c for c in combinedAMPPDF.columns if "dollar" in c.lower()), None)
+    metaGridPDF = metaGridPDF[
+        metaGridPDF["Attribute_Type"].astype(str).str.strip().str.upper() == "MODELING"
+    ]
+    attrGridPDF    = attrGridPDF.astype(object).fillna("nan").astype(str)
+    combinedAMPPDF = combinedAMPPDF.astype(object).fillna("nan").astype(str)
+    metaGridPDF    = metaGridPDF.astype(object).fillna("nan").astype(str)
+    combinedAMPPDF["TOTAL_UNIT_SALES"] = (
+        pd.to_numeric(combinedAMPPDF[SAL_COL], errors="coerce").fillna(0)
+        if SAL_COL else 0
+    )
+
+    print("START mappinglookup")
+    print("  Pre-flight coverage check — Lookup only; finding key combos with no historical match.")
+    recom_dict: dict = {}
+    _ml.runLookup(attrGridPDF, metaGridPDF, combinedAMPPDF, recom_dict)
+    print("DONE mappinglookup")
+    _raise_if_stopped(stop_event)
+
+    gaps = _extract_coverage_gaps(recom_dict)
+    if gaps:
+        total = sum(g["count"] for g in gaps)
+        print(f"Pre-flight: {total} key combo(s) across {len(gaps)} attribute(s) "
+              f"have no historical match — see warnings above.")
+    else:
+        print("Pre-flight: no coverage gaps — every flat-file key combo matched history.")
+    return gaps
 
 
 def write_qc_excel(out_path: str, payload: Phase1Payload,

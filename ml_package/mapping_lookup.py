@@ -523,8 +523,35 @@ def _build_lookup_table(mapped_df: pd.DataFrame, new_products_df: pd.DataFrame,
         _missing = _missing.copy()
         _missing[mdm_col] = ''
         _missing['score'] = 0
-        print(f"    Coverage gap: {len(_missing)} key combo(s) have no historical match — "
-              f"written as blank for analyst assignment; review input key column values for these products")
+        # A coverage gap means key-column VALUE(S) in the new data were not present
+        # in history, so Lookup can't carry a label across. It is NOT (usually) a
+        # column name/alignment problem -- that would leave ~the whole attribute
+        # unmatched, which the near-total note below calls out separately. Modeling
+        # values aren't expected to change between refreshes, so an unseen value is
+        # typically a data-entry slip (a placeholder/typo IN THE VALUE, e.g. "NA ...")
+        # or a genuinely new value for ML + analyst QC. List the offending values
+        # (repr() shows spacing/casing); cap the list so a large gap doesn't flood.
+        _total  = len(_ff_keys)
+        _frac   = len(_missing) / _total if _total else 1.0
+        _combos = [
+            ", ".join(f"{c}={v!r}" for c, v in zip(attr_key_cols, _row))
+            for _row in _missing[attr_key_cols].astype(str).itertuples(index=False, name=None)
+        ]
+        _preview = _combos[:10]
+        print(f"  WARNING - Coverage gap in attribute '{mdm_col}': {len(_missing)} of "
+              f"{_total} key combination(s) in the new data are not in the historical data, "
+              f"so they were written blank (flagged HIGH for QC). These are unseen values in "
+              f"({', '.join(attr_key_cols)}); modeling values are not expected to change "
+              f"between refreshes, so review each as a data-entry slip in the value or a "
+              f"genuinely new value for ML/analyst assignment:")
+        for _c in _preview:
+            print(f"      - {_c}")
+        if len(_combos) > len(_preview):
+            print(f"      ... and {len(_combos) - len(_preview)} more "
+                  f"(see the '{mdm_col}' lookup sheet -- blank rows with score 0)")
+        if _frac >= 0.99:
+            print(f"      NOTE: nearly ALL key combos for '{mdm_col}' are unmatched -- also "
+                  f"check the key columns line up with history (names/structure), not just values.")
         lookup_table = pd.concat(
             [lookup_table, _missing[attr_key_cols + [mdm_col, 'score']]],
             ignore_index=True,

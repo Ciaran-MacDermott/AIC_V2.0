@@ -68,7 +68,7 @@ _install_stub(
     runTextMatch=lambda *a, **kw: None,
 )
 _install_stub(
-    "ml_package.xgb_classifier",
+    "ml_package.ml_classifier",
     runML=lambda *a, **kw: {},
 )
 _install_stub(

@@ -17,7 +17,7 @@ xlsxwriter==3.2.9
 nltk==3.9.2
 rank-bm25==0.2.2
 rapidfuzz==3.13.0
-xgboost==2.1.4
+# xgboost retired in favour of LinearSVC — re-add to revive the XGB backend (see ml_classifier._make_classifier)
 scikit-learn==1.6.1
 regex==2026.1.15
 python-dateutil==2.9.0.post0

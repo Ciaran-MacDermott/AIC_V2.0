@@ -32,7 +32,7 @@ def _require(*mods: str) -> None:
 # than letting the test fail with an import error mid-collection.
 _require(
     "pandas", "numpy", "openpyxl", "xlsxwriter",
-    "xgboost", "sklearn", "nltk", "rank_bm25", "rapidfuzz",
+    "sklearn", "nltk", "rank_bm25", "rapidfuzz",
 )
 
 
@@ -43,9 +43,10 @@ _require(
 # tests/conftest.py.
 _STUB_MODULES = (
     "ml_package",
+    "ml_package.routing",
     "ml_package.mapping_lookup",
     "ml_package.text_match",
-    "ml_package.xgb_classifier",
+    "ml_package.ml_classifier",
     "ml_package.ensemble",
     "ml_package.write_results",
 )
